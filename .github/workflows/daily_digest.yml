@@ -1,0 +1,4 @@
+name: daily_digest.yml
+on:
+
+jobs:
