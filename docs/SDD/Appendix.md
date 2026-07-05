@@ -166,9 +166,6 @@ Các tài liệu của dự án có mối quan hệ như sau:
 
 | Tài liệu | Vai trò |
 |----------|----------|
-| PROJECT_INDEX.md | Quản lý cấu trúc và lộ trình tài liệu |
-| rules_me_and_AI.md | Quy tắc làm việc trong toàn bộ dự án |
-| SDD_ONBOARDING.md | Quy trình onboarding trước khi tham gia dự án |
 | Software Design Document | Nguồn thông tin thiết kế chính của hệ thống |
 | Architecture.md | Hiện thực hóa kiến trúc dựa trên Software Design Document |
 | DecisionLog.md | Ghi lại các quyết định kiến trúc và Trade-off |
