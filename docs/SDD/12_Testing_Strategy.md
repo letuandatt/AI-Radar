@@ -99,7 +99,7 @@ Các bài kiểm thử này tập trung vào luồng dữ liệu giữa các Mod
 
 # 12.6 Pipeline Testing
 
-Hai Pipeline chính của AI-Radar cần được kiểm thử độc lập.
+Hai pipeline nghiệp vụ của hệ thống cần được kiểm thử độc lập thông qua các kịch bản kiểm thử được mô tả dưới đây.
 
 ## Knowledge Update Pipeline
 

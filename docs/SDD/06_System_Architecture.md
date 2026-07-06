@@ -459,7 +459,7 @@ Answer
 
 ↓
 
-Zalo Assistant Bot
+Zalo Official Account
 
 Pipeline này tuyệt đối không:
 

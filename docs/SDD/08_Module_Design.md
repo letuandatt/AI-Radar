@@ -550,6 +550,8 @@ Việc phát hiện có thể dựa trên:
 - Hash.
 - Similarity Score.
 
+Việc kiểm tra Similarity được thực hiện bằng cách truy vấn các Knowledge Object đã tồn tại trong Qdrant, không chỉ trên tập dữ liệu vừa được thu thập trong lần chạy hiện tại.
+
 Điều này giúp tránh lưu nhiều Knowledge Object có nội dung gần như giống nhau.
 
 ---
