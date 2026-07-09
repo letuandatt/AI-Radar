@@ -4,7 +4,7 @@ Foundation View cung cấp góc nhìn tổng quan về kiến trúc AI-Radar ở
 
 View này trả lời:
 - Hệ thống này là hệ thống gì.
-- Tại sao lại thiết kế theo hươn này.
+- Tại sao lại thiết kế theo hướng này.
 - Những ràng buộc nào chi phối kiến trúc?
 
 Nó cố tình tránh đề cập đến các chi tiết triển khai, hành vi khi chạy và các vấn đề liên quan đến việc triển khai.
