@@ -84,7 +84,6 @@ Toàn bộ tài liệu Architecture tuân thủ các nguyên tắc sau:
 Architecture/
 
 ├── README.md
-
 ├── 01_Foundation/
 ├── 02_Structure/
 ├── 03_Runtime/
