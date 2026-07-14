@@ -21,32 +21,32 @@ Sơ đồ dưới đây minh họa ranh giới triển khai của AI-Radar và c
 
 ```mermaid
 graph TD
-    subgraph External Trigger [Tác nhân kích hoạt bên ngoài]
-        GHA[GitHub Actions<br/>Scheduler / Cron]
+    subgraph External_Trigger["Tác nhân kích hoạt bên ngoài"]
+        GHA["GitHub Actions<br/>Scheduler / Cron"]
     end
 
-    subgraph Deployment Environment [Môi trường triển khai - Docker Host]
-        subgraph Docker Network [Mạng nội bộ Docker]
-            APP[AI-Radar App Container<br/>(Python Monolith)]
-            QDRANT[(Qdrant Container<br/>Vector Database)]
+    subgraph Deployment["Môi trường triển khai - Docker Host"]
+        subgraph Network["Mạng nội bộ Docker"]
+            APP["AI-Radar App Container<br/>(Python Monolith)"]
+            QDRANT[("Qdrant Container<br/>Vector Database")]
         end
-        
-        VOL_QDRANT[(Qdrant Data Volume<br/>Persistent Storage)]
+
+        VOL_QDRANT[("Qdrant Data Volume<br/>Persistent Storage")]
     end
 
-    subgraph External Services [Dịch vụ bên ngoài - SaaS]
-        GROQ[Groq API<br/>LLM Provider]
-        ZALO[Zalo OA API<br/>Notification / Webhook]
-        SOURCES[Data Sources<br/>RSS, GitHub, HF...]
+    subgraph Services["Dịch vụ bên ngoài - SaaS"]
+        GROQ["Groq API<br/>LLM Provider"]
+        ZALO["Zalo OA API<br/>Notification / Webhook"]
+        SOURCES["Data Sources<br/>RSS, GitHub, HF..."]
     end
 
-    GHA -- "1. Kích hoạt Pipeline<br/>(HTTP Trigger / CLI)" --> APP
-    ZALO -- "2. Gửi Webhook<br/>(User Question)" --> APP
-    
-    APP -- "3. Fetch Data" --> SOURCES
-    APP -- "4. LLM Extraction / QA" --> GROQ
-    APP -- "5. Upsert / Retrieve" --> QDRANT
-    
+    GHA -->|"1. Kích hoạt Pipeline<br/>(HTTP Trigger / CLI)"| APP
+    ZALO -->|"2. Gửi Webhook<br/>(User Question)"| APP
+
+    APP -->|"3. Fetch Data"| SOURCES
+    APP -->|"4. LLM Extraction / QA"| GROQ
+    APP -->|"5. Upsert / Retrieve"| QDRANT
+
     QDRANT --- VOL_QDRANT
 ```
 
