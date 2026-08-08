@@ -99,12 +99,12 @@ For the complete architecture, please refer to the **Architecture Documentation*
 
 The project documentation is organized into dedicated document sets.
 
-| Document | Description |
-|-----------|-------------|
-| 📘 **Software Design Document (SDD)** | Requirements, system design and data model |
-| 🏛 **Architecture** | System organization, runtime and operations |
-| 📝 **Decision Log** | Design rationale and architectural decisions |
-| 🔌 **API Specification** | Internal APIs and Webhook reference |
+| Document                              | Description                                  |
+| ------------------------------------- | -------------------------------------------- |
+| 📘 **Software Design Document (SDD)** | Requirements, system design and data model   |
+| 🏛 **Architecture**                    | System organization, runtime and operations  |
+| 📝 **Decision Log**                   | Design rationale and architectural decisions |
+| 🔌 **API Specification**              | Internal APIs and Webhook reference          |
 
 > All detailed technical documentation is located in the **docs/** directory.
 
@@ -112,36 +112,37 @@ The project documentation is organized into dedicated document sets.
 
 # 🛠 Tech Stack
 
-| Category | Technology |
-|-----------|------------|
-| Language | Python 3.10+ |
-| AI Framework | LangChain |
-| LLM Provider | Groq API |
-| Embedding | Cohere Embeddings |
-| Vector Database | Qdrant |
-| Scheduler | GitHub Actions |
-| Notification | Zalo Official Account |
-| Deployment | Docker & Docker Compose |
+| Category        | Technology              |
+| --------------- | ----------------------- |
+| Language        | Python 3.10+            |
+| AI Framework    | LangChain               |
+| LLM Provider    | Groq API                |
+| Embedding       | Cohere Embeddings       |
+| Vector Database | Qdrant                  |
+| Scheduler       | GitHub Actions          |
+| Notification    | Zalo Official Account   |
+| Deployment      | Docker & Docker Compose |
 
 ---
 
 # 📈 Project Status
 
-| Status | Progress |
-|---------|----------|
-| Documentation | ✅ Completed |
-| Project Planning | 🟡 In Progress |
-| Implementation | ⏳ Upcoming |
-| Testing | ⏳ Planned |
-| Deployment | ⏳ Planned |
+| Status                | Progress       |
+| --------------------- | -------------- |
+| Documentation         | ✅ Completed   |
+| Project Planning      | ✅ Completed   |
+| Pre-Sprint Foundation | 🟡 In Progress |
+| Implementation        | ⏳ Upcoming    |
+| Testing               | ⏳ Planned     |
+| Deployment            | ⏳ Planned     |
 
 **Current Phase**
 
-> Documentation & Project Planning
+> Pre-Sprint Foundation
 
 **Next Milestone**
 
-> Core Implementation
+> Sprint 01 — Core Foundation Implementation
 
 ---
 
@@ -178,6 +179,6 @@ See the `LICENSE` file for details.
 
 **AI-Radar**
 
-*Turning scattered AI information into structured knowledge.*
+_Turning scattered AI information into structured knowledge._
 
 </div>
