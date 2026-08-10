@@ -1,4 +1,8 @@
 .env
+.venv/
 
 docs/private-docs/
 working
+
+__pycache__/
+*.py[cod]
