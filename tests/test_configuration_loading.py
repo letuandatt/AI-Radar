@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.config.settings import Settings
 
 
@@ -36,3 +39,17 @@ def test_loaded_configuration_can_be_used_by_application_component(monkeypatch):
     settings = Settings.model_validate({})
 
     assert settings.groq_api_key == "component-test-key"
+
+
+def test_configuration_missing_required_value_is_rejected(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
+    monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
+    monkeypatch.setenv("ZALO_APP_ID", "test-zalo-app-id")
+    monkeypatch.setenv("ZALO_APP_SECRET", "test-zalo-app-secret")
+    monkeypatch.setenv("ZALO_ACCESS_TOKEN", "test-zalo-access-token")
+    monkeypatch.setenv("ZALO_WEBHOOK_SECRET", "test-zalo-webhook-secret")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
