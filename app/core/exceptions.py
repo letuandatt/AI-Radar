@@ -17,6 +17,10 @@ class StartupError(ApplicationError):
     """Raised when application startup fails."""
 
 
+class DuplicateJobError(ApplicationError):
+    """Raised when a job is registered more than once."""
+
+
 def report_application_error(
     error: Exception,
     *,
