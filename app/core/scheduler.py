@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import time
 from enum import Enum
 from typing import Any
 
-from app.core.exceptions import DuplicateJobError
+from app.core.exceptions import DuplicateJobError, handle_application_exception
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +31,7 @@ class Job:
 
     job_id: str
     func: Callable[..., Any]
+    schedule: time
 
 
 class Scheduler:
@@ -110,3 +112,33 @@ class Scheduler:
             raise SchedulerStateError(
                 f"Scheduler must be ready for this operation; current state is {self._state.value}."
             )
+
+    def execute_scheduled_job(
+        self,
+        job_id: str,
+        current_time: time,
+    ) -> Any:
+        """Execute a registered job when its scheduled time is reached."""
+        self._ensure_ready()
+
+        job = self.get_job(job_id)
+
+        if current_time < job.schedule:
+            return None
+
+        logger.info("Executing scheduled job: %s", job.job_id)
+
+        try:
+            result = job.func()
+        except Exception as error:
+            handle_application_exception(
+                error,
+                context={
+                    "operation": "job_execution",
+                    "job_id": job.job_id,
+                },
+            )
+
+        logger.info("Job execution completed: %s", job.job_id)
+
+        return result
