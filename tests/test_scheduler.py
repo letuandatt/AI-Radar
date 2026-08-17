@@ -1,3 +1,6 @@
+import logging
+from datetime import time
+
 import pytest
 
 from app.core.exceptions import DuplicateJobError
@@ -60,7 +63,7 @@ def test_job_can_be_registered():
     scheduler = Scheduler()
     scheduler.initialize()
 
-    job = Job(job_id="test-job", func=lambda: None)
+    job = Job(job_id="test-job", func=lambda: None, schedule=time(6, 0))
 
     scheduler.register_job(job)
 
@@ -71,7 +74,7 @@ def test_registered_job_can_be_looked_up():
     scheduler = Scheduler()
     scheduler.initialize()
 
-    job = Job(job_id="test-job", func=lambda: None)
+    job = Job(job_id="test-job", func=lambda: None, schedule=time(6, 0))
 
     scheduler.register_job(job)
 
@@ -84,7 +87,7 @@ def test_job_registry_tracks_registered_job():
     scheduler = Scheduler()
     scheduler.initialize()
 
-    job = Job(job_id="test-job", func=lambda: None)
+    job = Job(job_id="test-job", func=lambda: None, schedule=time(6, 0))
 
     scheduler.register_job(job)
 
@@ -96,7 +99,7 @@ def test_duplicate_job_registration_raises_duplicate_job_error():
     scheduler = Scheduler()
     scheduler.initialize()
 
-    job = Job(job_id="test-job", func=lambda: None)
+    job = Job(job_id="test-job", func=lambda: None, schedule=time(6, 0))
 
     scheduler.register_job(job)
 
@@ -108,7 +111,7 @@ def test_duplicate_job_does_not_corrupt_scheduler_state():
     scheduler = Scheduler()
     scheduler.initialize()
 
-    job = Job(job_id="test-job", func=lambda: None)
+    job = Job(job_id="test-job", func=lambda: None, schedule=time(6, 0))
 
     scheduler.register_job(job)
 
@@ -118,3 +121,87 @@ def test_duplicate_job_does_not_corrupt_scheduler_state():
     assert scheduler.state is SchedulerState.READY
     assert scheduler.has_job("test-job") is True
     assert scheduler.get_job("test-job") == job
+
+
+def test_scheduled_job_executes_when_schedule_is_reached():
+    executed = []
+
+    def job():
+        executed.append(True)
+        return "success"
+
+    scheduler = Scheduler()
+    scheduler.initialize()
+
+    scheduler.register_job(
+        Job(
+            job_id="daily_digest",
+            func=job,
+            schedule=time(6, 0),
+        )
+    )
+
+    result = scheduler.execute_scheduled_job(
+        "daily_digest",
+        time(6, 0),
+    )
+
+    assert executed == [True]
+    assert result == "success"
+
+
+def test_scheduled_job_does_not_execute_before_schedule():
+    executed = []
+
+    def job():
+        executed.append(True)
+        return "success"
+
+    scheduler = Scheduler()
+    scheduler.initialize()
+
+    scheduler.register_job(
+        Job(
+            job_id="daily_digest",
+            func=job,
+            schedule=time(6, 0),
+        )
+    )
+
+    result = scheduler.execute_scheduled_job(
+        "daily_digest",
+        time(5, 0),
+    )
+
+    assert executed == []
+    assert result is None
+
+
+def test_scheduled_job_failure_is_reported_and_propagated(caplog):
+    error = RuntimeError("Job failed")
+
+    def job():
+        raise error
+
+    scheduler = Scheduler()
+    scheduler.initialize()
+
+    scheduler.register_job(
+        Job(
+            job_id="daily_digest",
+            func=job,
+            schedule=time(6, 0),
+        )
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="Job failed"):
+            scheduler.execute_scheduled_job(
+                "daily_digest",
+                time(6, 0),
+            )
+
+    assert any(
+        record.levelno == logging.ERROR and record.name == "app.core.exceptions"
+        for record in caplog.records
+    )
