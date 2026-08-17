@@ -6,6 +6,10 @@ application startup and shutdown flow.
 
 from enum import Enum
 
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class ApplicationState(str, Enum):
     """States an application instance can occupy during its lifetime."""
@@ -67,3 +71,9 @@ class ApplicationLifecycle:
             )
 
         self._state = next_state
+
+        logger.info(
+            "Application lifecycle transition: %s -> %s",
+            expected_state.value,
+            next_state.value,
+        )
