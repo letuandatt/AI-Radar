@@ -17,7 +17,13 @@ def main() -> ApplicationLifecycle:
         start_application(lifecycle)
         run_application()
     except Exception as error:
-        handle_application_exception(error)
+        handle_application_exception(
+            error,
+            context={
+                "operation": "application_runtime",
+                "lifecycle_state": lifecycle.state.value,
+            },
+        )
     finally:
         if lifecycle.state is ApplicationState.RUNNING:
             shutdown_application(lifecycle)

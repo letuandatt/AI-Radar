@@ -17,8 +17,29 @@ class StartupError(ApplicationError):
     """Raised when application startup fails."""
 
 
-def handle_application_exception(error: Exception) -> None:
-    """Log and propagate an unhandled application exception."""
-    logger.exception("Unhandled application exception")
+def report_application_error(
+    error: Exception,
+    *,
+    context: dict[str, object] | None = None,
+) -> None:
+    """Report an application error through the centralized logging path."""
+    error_context = context or {}
+
+    logger.error(
+        "Application error | type=%s | message=%s | context=%s",
+        type(error).__name__,
+        str(error),
+        error_context,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
+def handle_application_exception(
+    error: Exception,
+    *,
+    context: dict[str, object] | None = None,
+) -> None:
+    """Report and propagate an unhandled application exception."""
+    report_application_error(error, context=context)
 
     raise error
