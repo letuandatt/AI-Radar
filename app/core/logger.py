@@ -24,3 +24,12 @@ def initialize_logging() -> None:
 def get_logger(name: str) -> logging.Logger:
     """Return a logger for the given module/component."""
     return logging.getLogger(name)
+
+
+def shutdown_logging() -> None:
+    """Shutdown application-wide logging handlers."""
+    root_logger = logging.getLogger()
+
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)

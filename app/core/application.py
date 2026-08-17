@@ -1,13 +1,20 @@
 from ..config.settings import settings
+from ..core.logger import initialize_logging, shutdown_logging
+from ..core.scheduler import Scheduler
 from .lifecycle import ApplicationLifecycle
+
+_scheduler: Scheduler | None = None
 
 
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
+    global _scheduler
+
     lifecycle.begin_initialization()
 
     try:
         initialize_application()
+        _scheduler = initialize_core()
     except Exception:
         lifecycle.fail_initialization()
         raise
@@ -41,14 +48,12 @@ def run_application() -> None:
     """
 
 
-def initialize_application():
+def initialize_application() -> None:
     config = load_configuration()
 
     validate_configuration(config)
 
-    initialize_logging(config)
-
-    initialize_core(config)
+    initialize_logging()
 
 
 def load_configuration():
@@ -59,20 +64,17 @@ def validate_configuration(config):
     print("config - validated")
 
 
-def initialize_logging(config):
-    print("config - logging initialized")
+def initialize_core() -> Scheduler:
+    scheduler = Scheduler()
+    scheduler.initialize()
+
+    return scheduler
 
 
-def initialize_core(config):
-    print("config - core initialized")
+def shutdown_core() -> None:
+    """Stop initialized application-level core components."""
+    global _scheduler
 
-
-def shutdown_core():
-    """Release application-level core components.
-
-    This is an extension point until core components gain concrete resources.
-    """
-
-
-def shutdown_logging():
-    """Release logging resources after dependent components have stopped."""
+    if _scheduler is not None:
+        _scheduler.stop()
+        _scheduler = None

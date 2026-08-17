@@ -1,14 +1,12 @@
 from .core.application import run_application, shutdown_application, start_application
 from .core.exceptions import handle_application_exception
 from .core.lifecycle import ApplicationLifecycle, ApplicationState
-from .core.logger import get_logger, initialize_logging
+from .core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 def main() -> ApplicationLifecycle:
-    initialize_logging()
-
     lifecycle = ApplicationLifecycle()
 
     logger.info("Application startup")
