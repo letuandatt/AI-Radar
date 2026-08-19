@@ -1,14 +1,12 @@
 from .core.application import run_application, shutdown_application, start_application
 from .core.exceptions import handle_application_exception
 from .core.lifecycle import ApplicationLifecycle, ApplicationState
-from .core.logger import get_logger, initialize_logging
+from .core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 def main() -> ApplicationLifecycle:
-    initialize_logging()
-
     lifecycle = ApplicationLifecycle()
 
     logger.info("Application startup")
@@ -17,7 +15,13 @@ def main() -> ApplicationLifecycle:
         start_application(lifecycle)
         run_application()
     except Exception as error:
-        handle_application_exception(error)
+        handle_application_exception(
+            error,
+            context={
+                "operation": "application_runtime",
+                "lifecycle_state": lifecycle.state.value,
+            },
+        )
     finally:
         if lifecycle.state is ApplicationState.RUNNING:
             shutdown_application(lifecycle)
