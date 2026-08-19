@@ -1,20 +1,23 @@
-from ..config.settings import settings
+from ..config.settings import get_settings
 from ..core.logger import initialize_logging, shutdown_logging
 from ..core.scheduler import Scheduler
+from ..storage.qdrant_client import QdrantConnection
 from .lifecycle import ApplicationLifecycle
 
 _scheduler: Scheduler | None = None
+_database: QdrantConnection | None = None
 
 
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
-    global _scheduler
+    global _scheduler, _database
 
     lifecycle.begin_initialization()
 
     try:
         initialize_application()
         _scheduler = initialize_core()
+        _database = initialize_storage()
     except Exception:
         lifecycle.fail_initialization()
         raise
@@ -32,6 +35,7 @@ def shutdown_application(lifecycle: ApplicationLifecycle) -> None:
 
     try:
         shutdown_core()
+        shutdown_storage()
     finally:
         try:
             shutdown_logging()
@@ -46,22 +50,16 @@ def run_application() -> None:
     keeps the lifecycle execution flow complete without introducing scheduler
     behavior before that dependency exists.
     """
+    pass
 
 
 def initialize_application() -> None:
-    config = load_configuration()
-
-    validate_configuration(config)
-
+    load_configuration()
     initialize_logging()
 
 
 def load_configuration():
-    return settings
-
-
-def validate_configuration(config):
-    print("config - validated")
+    return get_settings
 
 
 def initialize_core() -> Scheduler:
@@ -78,3 +76,20 @@ def shutdown_core() -> None:
     if _scheduler is not None:
         _scheduler.stop()
         _scheduler = None
+
+
+def initialize_storage() -> QdrantConnection:
+    """Initialize the database connection using centralized configuration."""
+    settings = get_settings()
+    database = QdrantConnection(settings)
+    database.initialize()
+    return database
+
+
+def shutdown_storage() -> None:
+    """Close the database connection and release resources."""
+    global _database
+
+    if _database is not None:
+        _database.close()
+        _database = None
