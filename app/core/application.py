@@ -1,23 +1,23 @@
 from ..config.settings import get_settings
 from ..core.logger import initialize_logging, shutdown_logging
 from ..core.scheduler import Scheduler
-from ..storage.qdrant_client import QdrantConnection
+from ..storage.base import initialize_storage, shutdown_storage
 from .lifecycle import ApplicationLifecycle
 
 _scheduler: Scheduler | None = None
-_database: QdrantConnection | None = None
 
 
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
-    global _scheduler, _database
+    global _scheduler
 
     lifecycle.begin_initialization()
 
     try:
         initialize_application()
         _scheduler = initialize_core()
-        _database = initialize_storage()
+
+        initialize_storage(get_settings())
     except Exception:
         lifecycle.fail_initialization()
         raise
@@ -76,20 +76,3 @@ def shutdown_core() -> None:
     if _scheduler is not None:
         _scheduler.stop()
         _scheduler = None
-
-
-def initialize_storage() -> QdrantConnection:
-    """Initialize the database connection using centralized configuration."""
-    settings = get_settings()
-    database = QdrantConnection(settings)
-    database.initialize()
-    return database
-
-
-def shutdown_storage() -> None:
-    """Close the database connection and release resources."""
-    global _database
-
-    if _database is not None:
-        _database.close()
-        _database = None

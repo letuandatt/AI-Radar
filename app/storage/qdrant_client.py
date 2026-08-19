@@ -39,6 +39,10 @@ class QdrantConnection:
         """Return the current database connection state."""
         return self._state
 
+    def is_ready(self) -> bool:
+        """Return whether the storage is fully initialized and ready for use."""
+        return self._state is DatabaseState.INITIALIZED
+
     def initialize(self) -> None:
         """Initialize the Qdrant client and verify the connection."""
         if self._state is not DatabaseState.CREATED:
