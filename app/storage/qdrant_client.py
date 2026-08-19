@@ -43,6 +43,25 @@ class QdrantConnection:
         """Return whether the storage is fully initialized and ready for use."""
         return self._state is DatabaseState.INITIALIZED
 
+    def get_client(self) -> "QdrantClient":
+        """Return the underlying Qdrant client for controlled access.
+
+        This method allows higher-level modules (e.g., vectorstores/) to
+        interact with the database while ensuring the connection is valid.
+
+        Raises:
+            DatabaseStateError: If the connection is not in INITIALIZED state.
+        """
+        if self._state is not DatabaseState.INITIALIZED:
+            raise DatabaseStateError(
+                f"Cannot get client from '{self._state.value}' state. "
+                "Connection must be initialized first."
+            )
+
+        # State check guarantees _client is not None
+        assert self._client is not None, "Client must exist when state is INITIALIZED"
+        return self._client
+
     def initialize(self) -> None:
         """Initialize the Qdrant client and verify the connection."""
         if self._state is not DatabaseState.CREATED:
@@ -75,7 +94,13 @@ class QdrantConnection:
             raise DatabaseStateError(f"Cannot close database from {self._state.value} state.")
 
         if self._client:
-            self._client.close()
+            try:
+                self._client.close()
+            except Exception as error:
+                # Log lỗi nhưng KHÔNG ném ra ngoài.
+                # Điều này đảm bảo application shutdown không bị crash
+                # chỉ vì một lỗi network khi đóng connection.
+                logger.error("Failed to close Qdrant client gracefully: %s", error)
 
         self._state = DatabaseState.CLOSED
         logger.info("Qdrant database connection closed")

@@ -72,6 +72,12 @@ def shutdown_storage() -> None:
 
     if _storage_provider is not None:
         logger.info("Shutting down storage abstraction")
-        _storage_provider.close()
-        _storage_provider = None
+        try:
+            _storage_provider.close()
+        except Exception as e:
+            logger.error("Error shutting down storage: %s", e)
+        finally:
+            # LUÔN reset về None để tránh leak state,
+            # ngay cả khi provider.close() ném lỗi (dù hiện tại đã bắt rồi).
+            _storage_provider = None
         logger.info("Storage abstraction shut down successfully")

@@ -1,10 +1,11 @@
 from ..config.settings import get_settings
-from ..core.logger import initialize_logging, shutdown_logging
+from ..core.logger import get_logger, initialize_logging, shutdown_logging
 from ..core.scheduler import Scheduler
 from ..storage.base import initialize_storage, shutdown_storage
 from .lifecycle import ApplicationLifecycle
 
 _scheduler: Scheduler | None = None
+logger = get_logger(__name__)
 
 
 def start_application(lifecycle: ApplicationLifecycle) -> None:
@@ -26,16 +27,20 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
 
 
 def shutdown_application(lifecycle: ApplicationLifecycle) -> None:
-    """Stop initialized components and advance the lifecycle to ``Stopped``.
-
-    Components are released in reverse startup order. The nested ``finally``
-    blocks ensure later cleanup still runs when an earlier shutdown step fails.
-    """
+    """Stop initialized components and advance the lifecycle to ``Stopped``."""
     lifecycle.begin_stopping()
 
+    # Tách riêng try-except cho từng component để đảm bảo component sau
+    # vẫn được shutdown ngay cả khi component trước đó gặp lỗi.
     try:
         shutdown_core()
+    except Exception as error:
+        logger.error("Error during core shutdown: %s", error)
+
+    try:
         shutdown_storage()
+    except Exception as error:
+        logger.error("Error during storage shutdown: %s", error)
     finally:
         try:
             shutdown_logging()
