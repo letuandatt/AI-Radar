@@ -97,3 +97,58 @@ def test_close_fails_if_not_initialized(mock_settings):
 
     with pytest.raises(DatabaseStateError):
         conn.close()
+
+
+@patch("qdrant_client.QdrantClient")
+def test_get_client_returns_client_when_initialized(mock_client_class, mock_settings):
+    """Verify that get_client returns the singleton instance when ready."""
+    mock_client_instance = MagicMock()
+    mock_client_class.return_value = mock_client_instance
+
+    conn = QdrantConnection(mock_settings)
+    conn.initialize()
+
+    # Act
+    client = conn.get_client()
+
+    # Assert: Returns the exact same instance (Connection Reuse)
+    assert client is mock_client_instance
+
+
+def test_get_client_raises_error_when_created(mock_settings):
+    """Verify that get_client fails if connection is not initialized."""
+    conn = QdrantConnection(mock_settings)
+
+    with pytest.raises(DatabaseStateError, match="Cannot get client from 'created' state"):
+        conn.get_client()
+
+
+@patch("qdrant_client.QdrantClient")
+def test_get_client_raises_error_when_closed(mock_client_class, mock_settings):
+    """Verify that get_client fails if connection has been closed."""
+    mock_client_instance = MagicMock()
+    mock_client_class.return_value = mock_client_instance
+
+    conn = QdrantConnection(mock_settings)
+    conn.initialize()
+    conn.close()
+
+    with pytest.raises(DatabaseStateError, match="Cannot get client from 'closed' state"):
+        conn.get_client()
+
+
+@patch("qdrant_client.QdrantClient")
+def test_close_handles_network_error_gracefully(mock_client_class, mock_settings, caplog):
+    """Verify that close() transitions to CLOSED even if client.close() fails."""
+    mock_client_instance = MagicMock()
+    mock_client_instance.close.side_effect = Exception("Network error during close")
+    mock_client_class.return_value = mock_client_instance
+
+    conn = QdrantConnection(mock_settings)
+    conn.initialize()
+
+    with caplog.at_level(logging.ERROR):
+        conn.close()  # Should not raise
+
+    assert conn.state is DatabaseState.CLOSED
+    assert "Failed to close Qdrant client gracefully" in caplog.text

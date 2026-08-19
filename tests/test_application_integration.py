@@ -45,3 +45,23 @@ def test_application_shuts_down_storage_via_abstraction(
     # Assert: shutdown_storage was called
     mock_shutdown_storage.assert_called_once()
     assert lifecycle.state is ApplicationState.STOPPED
+
+
+@patch("app.core.application.shutdown_storage")
+@patch("app.core.application.initialize_storage")
+@patch("app.core.application.get_settings")
+def test_application_shuts_down_cleanly_even_if_storage_fails(
+    mock_get_settings, mock_init_storage, mock_shutdown_storage
+):
+    """Verify that application reaches STOPPED state even if storage shutdown raises."""
+    mock_get_settings.return_value = MagicMock()
+    mock_shutdown_storage.side_effect = RuntimeError("Storage shutdown failed")
+
+    lifecycle = ApplicationLifecycle()
+    start_application(lifecycle)
+
+    # Act: Shutdown application (storage will fail)
+    shutdown_application(lifecycle)
+
+    # Assert: Application must still reach STOPPED state
+    assert lifecycle.state is ApplicationState.STOPPED

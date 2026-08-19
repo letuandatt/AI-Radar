@@ -75,3 +75,15 @@ def test_shutdown_storage_closes_and_clears_provider():
 def test_shutdown_storage_is_safe_if_not_initialized():
     # Should not raise any error
     shutdown_storage()
+
+
+def test_shutdown_storage_resets_state_even_if_close_fails():
+    """Verify that _storage_provider is reset to None even if close() fails."""
+    mock_provider = MagicMock()
+    mock_provider.close.side_effect = RuntimeError("Close failed")
+    storage_base._storage_provider = mock_provider
+
+    # Should not raise, and state must be reset
+    shutdown_storage()
+
+    assert storage_base._storage_provider is None
