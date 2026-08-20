@@ -4,10 +4,10 @@ This module defines the foundational protocols that all fetcher components
 must adhere to, ensuring loose coupling and high testability.
 """
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.models.article import RawArticle
-from app.models.source import RSSSource
+from app.models.source import GitHubRepository, RSSSource
 
 
 class SourceRegistry(Protocol):
@@ -90,5 +90,33 @@ class Parser(Protocol):
         Raises:
             ParsingError: If the raw data is fundamentally malformed
                           and cannot be parsed at all.
+        """
+        ...
+
+
+class JSONFetcher(Protocol):
+    """Contract for retrieving JSON data from an API source.
+
+    Implementations of this protocol are responsible for establishing
+    network connections, handling authentication, and returning parsed
+    JSON data (dict or list) from the target API.
+    """
+
+    def fetch_json(
+        self, source: GitHubRepository, endpoint: str
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Fetch JSON data from the specified GitHub repository.
+
+        Args:
+            source: The GitHub repository to fetch from.
+            endpoint: The specific API endpoint path (e.g., 'commits', 'issues').
+
+        Returns:
+            The parsed JSON data as a dict or list of dicts.
+
+        Raises:
+            GitHubAPIError: If the GitHub API returns an error (401/403/404/422/429).
+            NetworkError: If the connection cannot be established.
+            FetchTimeoutError: If the request exceeds the time limit.
         """
         ...

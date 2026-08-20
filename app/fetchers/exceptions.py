@@ -34,3 +34,11 @@ class ParsingError(FetcherError):
     This typically indicates malformed XML/JSON or a fundamental
     incompatibility with the expected data format.
     """
+
+
+class GitHubAPIError(FetcherError):
+    """Raised when GitHub API returns an error response.
+
+    This includes authentication failures (401/403), resource not found (404),
+    validation errors (422), and rate limit exceeded (429).
+    """
