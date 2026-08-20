@@ -41,3 +41,28 @@ class SourceRegistry(Protocol):
             KeyError: If no source with the given name is found.
         """
         ...
+
+
+class Fetcher(Protocol):
+    """Contract for retrieving raw data from a source.
+
+    Implementations of this protocol are responsible for establishing
+    network connections, handling timeouts, and returning the raw
+    string content (e.g., XML, HTML, JSON) from the target source.
+    """
+
+    def fetch_raw(self, source: RSSSource) -> str:
+        """Fetch raw content from the specified source.
+
+        Args:
+            source: The data source to fetch from.
+
+        Returns:
+            The raw string content of the feed/data.
+
+        Raises:
+            NetworkError: If the connection cannot be established.
+            FetchTimeoutError: If the request exceeds the time limit.
+            HTTPStatusError: If the server returns a 4xx or 5xx status code.
+        """
+        ...

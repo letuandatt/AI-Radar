@@ -27,6 +27,10 @@ class Settings(BaseSettings):
         examples=[[{"name": "techcrunch", "url": "https://techcrunch.com/feed/"}]],
     )
 
+    fetch_timeout: float = Field(
+        default=10.0, description="Timeout in seconds for HTTP requests made by fetchers."
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
