@@ -6,6 +6,7 @@ must adhere to, ensuring loose coupling and high testability.
 
 from typing import Protocol
 
+from app.models.article import RawArticle
 from app.models.source import RSSSource
 
 
@@ -64,5 +65,30 @@ class Fetcher(Protocol):
             NetworkError: If the connection cannot be established.
             FetchTimeoutError: If the request exceeds the time limit.
             HTTPStatusError: If the server returns a 4xx or 5xx status code.
+        """
+        ...
+
+
+class Parser(Protocol):
+    """Contract for parsing raw data into structured models.
+
+    Implementations of this protocol are responsible for transforming
+    raw string content (e.g., XML, HTML) into a list of domain models
+    (e.g., RawArticle).
+    """
+
+    def parse(self, raw_data: str, source: RSSSource) -> list[RawArticle]:
+        """Parse raw data into a list of RawArticle models.
+
+        Args:
+            raw_data: The raw string content to parse.
+            source: The source from which the data was fetched.
+
+        Returns:
+            A list of parsed RawArticle instances.
+
+        Raises:
+            ParsingError: If the raw data is fundamentally malformed
+                          and cannot be parsed at all.
         """
         ...

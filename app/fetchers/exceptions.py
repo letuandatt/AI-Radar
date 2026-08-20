@@ -26,3 +26,11 @@ class FetchTimeoutError(FetcherError):
 
 class HTTPStatusError(FetcherError):
     """Raised when the server returns an unsuccessful HTTP status code (4xx, 5xx)."""
+
+
+class ParsingError(FetcherError):
+    """Raised when raw data cannot be parsed into structured models.
+
+    This typically indicates malformed XML/JSON or a fundamental
+    incompatibility with the expected data format.
+    """
