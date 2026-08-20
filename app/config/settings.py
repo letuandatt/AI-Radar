@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,12 @@ class Settings(BaseSettings):
     zalo_app_secret: str
     zalo_access_token: str
     zalo_webhook_secret: str
+
+    rss_sources: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="List of RSS sources. Each item must be a dict with 'name' and 'url' keys.",
+        examples=[[{"name": "techcrunch", "url": "https://techcrunch.com/feed/"}]],
+    )
 
 
 @lru_cache
