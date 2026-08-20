@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.models.source import RSSSource
+from app.models.source import GitHubRepository, RSSSource
 
 
 def test_rss_source_creation():
@@ -27,3 +27,28 @@ def test_rss_source_is_immutable():
 
     with pytest.raises(AttributeError):
         source.name = "new_name"
+
+
+def test_github_repository_creation():
+    """Verify that a GitHubRepository can be created with required fields."""
+    repo = GitHubRepository(name="fastapi", owner="tiangolo", repo="fastapi")
+
+    assert repo.name == "fastapi"
+    assert repo.owner == "tiangolo"
+    assert repo.repo == "fastapi"
+    assert repo.is_active is True  # Default value
+
+
+def test_github_repository_inactive():
+    """Verify that a GitHubRepository can be explicitly set to inactive."""
+    repo = GitHubRepository(name="old_repo", owner="user", repo="repo", is_active=False)
+
+    assert repo.is_active is False
+
+
+def test_github_repository_is_immutable():
+    """Verify that GitHubRepository is frozen (immutable)."""
+    repo = GitHubRepository(name="test", owner="user", repo="repo")
+
+    with pytest.raises(AttributeError):
+        repo.name = "new_name"
