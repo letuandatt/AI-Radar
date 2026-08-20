@@ -31,6 +31,19 @@ class Settings(BaseSettings):
         default=10.0, description="Timeout in seconds for HTTP requests made by fetchers."
     )
 
+    github_repositories: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="List of GitHub repositories. "
+        "Each item must be a dict with 'name', 'owner', and 'repo' keys.",
+        examples=[[{"name": "fastapi", "owner": "tiangolo", "repo": "fastapi"}]],
+    )
+
+    github_token: str | None = Field(
+        default=None,
+        description="GitHub Personal Access Token for authenticated API requests"
+        " (increases rate limits).",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

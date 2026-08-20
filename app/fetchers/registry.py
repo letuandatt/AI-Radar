@@ -7,9 +7,14 @@ that loads data source configurations from the application settings.
 from app.config.settings import Settings
 from app.core.logger import get_logger
 from app.fetchers.exceptions import DuplicateSourceError
-from app.models.source import RSSSource
+from app.models.source import GitHubRepository, RSSSource
 
 logger = get_logger(__name__)
+
+
+# ==========================================
+# RSS Source Registry
+# ==========================================
 
 
 class ConfigBasedSourceRegistry:
@@ -93,3 +98,92 @@ def get_source_registry() -> ConfigBasedSourceRegistry:
             "Ensure initialize_source_registry() is called during application startup."
         )
     return _registry
+
+
+# ==========================================
+# GitHub Repository Registry
+# ==========================================
+
+
+class ConfigBasedGitHubRegistry:
+    """A registry that loads GitHub repository configurations from settings.
+
+    Operates in-memory for high-performance access. Initialized once
+    during startup and remains read-only at runtime.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        """Initialize the registry and load repositories from settings."""
+        self._repositories: dict[str, GitHubRepository] = {}
+        self._load_from_config(settings)
+
+    def _load_from_config(self, settings: Settings) -> None:
+        """Parse and load GitHub repositories from the provided settings."""
+        for repo_config in settings.github_repositories:
+            name = repo_config.get("name")
+            owner = repo_config.get("owner")
+            repo = repo_config.get("repo")
+
+            if not name or not owner or not repo:
+                logger.warning(
+                    "Skipping invalid GitHub repo config (missing 'name', 'owner', or 'repo'): %s",
+                    repo_config,
+                )
+                continue
+
+            repository = GitHubRepository(name=name, owner=owner, repo=repo)
+            try:
+                self.register(repository)
+            except DuplicateSourceError as e:
+                logger.warning("Skipping duplicate repository in config: %s", e)
+
+    def register(self, repository: GitHubRepository) -> None:
+        """Register a new GitHub repository."""
+        if repository.name in self._repositories:
+            raise DuplicateSourceError(
+                f"Repository with name '{repository.name}' is already registered."
+            )
+        self._repositories[repository.name] = repository
+        logger.debug("Registered GitHub repository: %s/%s", repository.owner, repository.repo)
+
+    def get_all(self) -> list[GitHubRepository]:
+        """Retrieve all registered GitHub repositories."""
+        return list(self._repositories.values())
+
+    def get_by_name(self, name: str) -> GitHubRepository:
+        """Retrieve a specific GitHub repository by its unique name."""
+        if name not in self._repositories:
+            raise KeyError(f"Repository '{name}' not found in registry.")
+        return self._repositories[name]
+
+
+_github_registry: ConfigBasedGitHubRegistry | None = None
+
+
+def initialize_github_registry(settings: Settings) -> None:
+    """Initialize the global GitHub registry from settings."""
+    global _github_registry
+
+    if _github_registry is not None:
+        logger.warning("GitHub registry is already initialized. Skipping.")
+        return
+
+    _github_registry = ConfigBasedGitHubRegistry(settings)
+    logger.info(
+        "GitHub registry initialized successfully with %d repositories.",
+        len(_github_registry.get_all()),
+    )
+
+
+def get_github_registry() -> ConfigBasedGitHubRegistry:
+    """Return the global GitHub registry instance.
+
+    Raises:
+        RuntimeError: If the registry has not been initialized yet.
+    """
+    if _github_registry is None:
+        raise RuntimeError(
+            "GitHub registry is not initialized. "
+            "Ensure initialize_github_registry() is called during application startup."
+        )
+    return _github_registry

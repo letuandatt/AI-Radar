@@ -20,3 +20,20 @@ class RSSSource:
     name: str
     url: str
     is_active: bool = True
+
+
+@dataclass(frozen=True)
+class GitHubRepository:
+    """Represents a GitHub repository source configuration.
+
+    Attributes:
+        name: A unique, human-readable identifier for the source.
+        owner: The GitHub user or organization that owns the repository.
+        repo: The repository name.
+        is_active: Whether the source is currently enabled for fetching.
+    """
+
+    name: str
+    owner: str
+    repo: str
+    is_active: bool = True
