@@ -7,7 +7,7 @@ that loads data source configurations from the application settings.
 from app.config.settings import Settings
 from app.core.logger import get_logger
 from app.fetchers.exceptions import DuplicateSourceError
-from app.models.source import GitHubRepository, RSSSource
+from app.models.source import GitHubRepository, HFSource, HFSourceType, RSSSource
 
 logger = get_logger(__name__)
 
@@ -187,3 +187,104 @@ def get_github_registry() -> ConfigBasedGitHubRegistry:
             "Ensure initialize_github_registry() is called during application startup."
         )
     return _github_registry
+
+
+# ==========================================
+# Hugging Face Source Registry
+# ==========================================
+
+
+class ConfigBasedHFRegistry:
+    """A registry that loads Hugging Face source configurations from settings.
+
+    Operates in-memory for high-performance access. Initialized once
+    during startup and remains read-only at runtime.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        """Initialize the registry and load sources from settings."""
+        self._sources: dict[str, HFSource] = {}
+        self._load_from_config(settings)
+
+    def _load_from_config(self, settings: Settings) -> None:
+        """Parse and load Hugging Face sources from the provided settings."""
+        for source_config in settings.hf_sources:
+            name = source_config.get("name")
+            resource_id = source_config.get("resource_id")
+            source_type_str = source_config.get("source_type")
+
+            if not name or not resource_id or not source_type_str:
+                logger.warning(
+                    "Skipping invalid HF source config "
+                    "(missing 'name', 'resource_id', or 'source_type'): %s",
+                    source_config,
+                )
+                continue
+
+            try:
+                source_type = HFSourceType(source_type_str)
+            except ValueError:
+                logger.warning(
+                    "Skipping HF source config with invalid 'source_type' ('%s'). "
+                    "Must be 'dataset' or 'model': %s",
+                    source_type_str,
+                    source_config,
+                )
+                continue
+
+            source = HFSource(name=name, resource_id=resource_id, source_type=source_type)
+            try:
+                self.register(source)
+            except DuplicateSourceError as e:
+                logger.warning("Skipping duplicate HF source in config: %s", e)
+
+    def register(self, source: HFSource) -> None:
+        """Register a new Hugging Face source."""
+        if source.name in self._sources:
+            raise DuplicateSourceError(
+                f"HF Source with name '{source.name}' is already registered."
+            )
+        self._sources[source.name] = source
+        logger.debug("Registered HF source: %s (%s)", source.resource_id, source.source_type.value)
+
+    def get_all(self) -> list[HFSource]:
+        """Retrieve all registered Hugging Face sources."""
+        return list(self._sources.values())
+
+    def get_by_name(self, name: str) -> HFSource:
+        """Retrieve a specific Hugging Face source by its unique name."""
+        if name not in self._sources:
+            raise KeyError(f"HF Source '{name}' not found in registry.")
+        return self._sources[name]
+
+
+_hf_registry: ConfigBasedHFRegistry | None = None
+
+
+def initialize_hf_registry(settings: Settings) -> None:
+    """Initialize the global Hugging Face registry from settings."""
+    global _hf_registry
+
+    if _hf_registry is not None:
+        logger.warning("Hugging Face registry is already initialized. Skipping.")
+        return
+
+    _hf_registry = ConfigBasedHFRegistry(settings)
+    logger.info(
+        "Hugging Face registry initialized successfully with %d sources.",
+        len(_hf_registry.get_all()),
+    )
+
+
+def get_hf_registry() -> ConfigBasedHFRegistry:
+    """Return the global Hugging Face registry instance.
+
+    Raises:
+        RuntimeError: If the registry has not been initialized yet.
+    """
+    if _hf_registry is None:
+        raise RuntimeError(
+            "Hugging Face registry is not initialized. "
+            "Ensure initialize_hf_registry() is called during application startup."
+        )
+    return _hf_registry

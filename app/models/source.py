@@ -5,6 +5,7 @@ that the system can ingest data from.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 
 
 @dataclass(frozen=True)
@@ -36,4 +37,28 @@ class GitHubRepository:
     name: str
     owner: str
     repo: str
+    is_active: bool = True
+
+
+class HFSourceType(str, Enum):
+    """Defines the type of Hugging Face resource."""
+
+    DATASET = "dataset"
+    MODEL = "model"
+
+
+@dataclass(frozen=True)
+class HFSource:
+    """Represents a Hugging Face source configuration.
+
+    Attributes:
+        name: A unique, human-readable identifier for the source.
+        resource_id: The Hugging Face resource identifier (e.g., 'username/repo_name').
+        source_type: The type of resource (dataset or model).
+        is_active: Whether the source is currently enabled for fetching.
+    """
+
+    name: str
+    resource_id: str
+    source_type: HFSourceType
     is_active: bool = True

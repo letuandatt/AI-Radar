@@ -44,6 +44,22 @@ class Settings(BaseSettings):
         " (increases rate limits).",
     )
 
+    hf_sources: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="List of Hugging Face sources. "
+        "Each item must be a dict with 'name', 'resource_id', "
+        "and 'source_type' ('dataset' or 'model') keys.",
+        examples=[
+            [
+                {
+                    "name": "bert_base",
+                    "resource_id": "google-bert/bert-base-uncased",
+                    "source_type": "model",
+                }
+            ]
+        ],
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

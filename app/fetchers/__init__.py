@@ -2,8 +2,10 @@
 
 from .registry import (
     get_github_registry,
+    get_hf_registry,
     get_source_registry,
     initialize_github_registry,
+    initialize_hf_registry,
     initialize_source_registry,
 )
 
@@ -12,4 +14,6 @@ __all__ = [
     "initialize_source_registry",
     "get_github_registry",
     "initialize_github_registry",
+    "get_hf_registry",
+    "initialize_hf_registry",
 ]
