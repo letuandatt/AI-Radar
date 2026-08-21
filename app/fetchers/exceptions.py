@@ -42,3 +42,11 @@ class GitHubAPIError(FetcherError):
     This includes authentication failures (401/403), resource not found (404),
     validation errors (422), and rate limit exceeded (429).
     """
+
+
+class HuggingFaceAPIError(FetcherError):
+    """Raised when Hugging Face API returns an error response.
+
+    This includes authentication failures (401/403), resource not found (404),
+    and rate limit exceeded (429).
+    """
