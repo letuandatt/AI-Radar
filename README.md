@@ -113,49 +113,15 @@ The project documentation is organized into dedicated document sets.
 # 🛠 Tech Stack
 
 | Category        | Technology              |
-| --------------- | ----------------------- |
+| --------------- |-------------------------|
 | Language        | Python 3.10+            |
 | AI Framework    | LangChain               |
 | LLM Provider    | Groq API                |
 | Embedding       | Cohere Embeddings       |
 | Vector Database | Qdrant                  |
-| Scheduler       | GitHub Actions          |
+| Scheduler       | APScheduler             |
 | Notification    | Zalo Official Account   |
 | Deployment      | Docker & Docker Compose |
-
----
-
-# 📈 Project Status
-
-| Status                | Progress       |
-| --------------------- | -------------- |
-| Documentation         | ✅ Completed   |
-| Project Planning      | ✅ Completed   |
-| Pre-Sprint Foundation | 🟡 In Progress |
-| Implementation        | ⏳ Upcoming    |
-| Testing               | ⏳ Planned     |
-| Deployment            | ⏳ Planned     |
-
-**Current Phase**
-
-> Pre-Sprint Foundation
-
-**Next Milestone**
-
-> Sprint 01 — Core Foundation Implementation
-
----
-
-# 🗺 Roadmap
-
-- ✅ Foundation & Design
-- ✅ Architecture Documentation
-- ✅ Decision Log
-- ✅ API Specification
-- 🔄 Project Planning
-- ⏳ Core Implementation
-- ⏳ Integration & Testing
-- ⏳ Production Deployment
 
 ---
 
@@ -163,7 +129,9 @@ The project documentation is organized into dedicated document sets.
 
 > 🚧 **Coming Soon**
 
-The installation guide, Docker setup and local development workflow will be available after the implementation phase begins.
+The system is currently in the <b>Development</b> phase, with core infrastructure and multi-source data acquisition (RSS, GitHub, Hugging Face) fully operational.
+
+Detailed installation guides, Docker setup, and local development workflows will be published soon.
 
 ---
 
