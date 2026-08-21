@@ -60,6 +60,10 @@ class Settings(BaseSettings):
         ],
     )
 
+    hf_token: str | None = Field(
+        default=None, description="Hugging Face API Token for authenticated requests."
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
