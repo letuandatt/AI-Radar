@@ -5,6 +5,8 @@ from the Hugging Face Hub API, handling authentication and specific
 API error codes.
 """
 
+from datetime import datetime
+
 import httpx
 
 from app.config.settings import get_settings
@@ -14,6 +16,7 @@ from app.fetchers.exceptions import (
     HuggingFaceAPIError,
     NetworkError,
 )
+from app.models.article import RawArticle
 from app.models.source import HFSource, HFSourceType
 
 logger = get_logger(__name__)
@@ -98,3 +101,83 @@ class HuggingFaceFetcher:
 
         logger.error(error_message)
         raise HuggingFaceAPIError(error_message) from error
+
+
+class HuggingFaceParser:
+    """Parses JSON metadata from Hugging Face API into RawArticle models.
+
+    This parser handles the specific JSON structures returned by the
+    Hugging Face Hub API for datasets and models, transforming them into
+    the standardized RawArticle format for knowledge extraction.
+    """
+
+    def parse(self, data: dict, source: HFSource) -> list[RawArticle]:
+        """Parse Hugging Face metadata JSON into a list of RawArticle models.
+
+        Note: Hugging Face API returns a single dictionary per resource,
+        not a list. This method returns a list with 0 or 1 element for
+        consistency with other parsers.
+
+        Args:
+            data: The metadata dictionary from Hugging Face API.
+            source: The source configuration this data belongs to.
+
+        Returns:
+            A list containing 0 or 1 RawArticle instance.
+        """
+        resource_id = data.get("id") or data.get("modelId") or data.get("datasetId")
+
+        # Defensive Parsing: Skip if essential identifier is missing
+        if not resource_id:
+            logger.warning(
+                "Skipping HF resource from %s: missing 'id', 'modelId', or 'datasetId'", source.name
+            )
+            return []
+
+        # Extract title (prefer cardData.title, fallback to resource_id)
+        card_data = data.get("cardData") or {}
+        title = card_data.get("title") or resource_id
+
+        # Build URL based on source type
+        if source.source_type == HFSourceType.DATASET:
+            url = f"https://huggingface.co/datasets/{resource_id}"
+        else:  # MODEL
+            url = f"https://huggingface.co/{resource_id}"
+
+        # Extract content (description)
+        content = data.get("description") or card_data.get("description") or ""
+
+        # Parse last modified date
+        published_date = self._parse_iso_date(data.get("lastModified"))
+
+        article = RawArticle(
+            title=title,
+            url=url,
+            content=content,
+            published_date=published_date,
+            source_name=source.name,
+        )
+
+        logger.info("Parsed HF resource: %s (%s)", title, source.name)
+        return [article]
+
+    def _parse_iso_date(self, date_str: str | None) -> datetime | None:
+        """Convert Hugging Face's ISO 8601 date string to a datetime object.
+
+        Hugging Face returns dates like "2024-03-15T10:00:00.000Z".
+        Python's fromisoformat() doesn't handle the 'Z' suffix until Python 3.11,
+        so we replace it with '+00:00' for compatibility.
+        """
+        if not date_str:
+            return None
+        try:
+            # Handle milliseconds and 'Z' suffix
+            if date_str.endswith("Z"):
+                date_str = date_str[:-1] + "+00:00"
+            # Remove milliseconds if present (e.g., ".000")
+            if "." in date_str:
+                date_str = date_str.split(".")[0] + date_str[date_str.rfind("+") :]
+            return datetime.fromisoformat(date_str)
+        except ValueError as error:
+            logger.warning("Failed to parse date '%s': %s", date_str, error)
+            return None
