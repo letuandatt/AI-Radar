@@ -33,7 +33,7 @@ class HuggingFaceFetcher:
         """Initialize the fetcher with Hugging Face-specific headers and auth."""
         settings = get_settings()
         self._timeout = timeout or settings.fetch_timeout
-        self._token = settings.hf_token  # type: ignore[attr-defined]
+        self._token = settings.hf_token
 
         self._headers = {
             "Accept": "application/json",
