@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.models.source import GitHubRepository, RSSSource
+from app.models.source import GitHubRepository, HFSource, HFSourceType, RSSSource
 
 
 def test_rss_source_creation():
@@ -52,3 +52,31 @@ def test_github_repository_is_immutable():
 
     with pytest.raises(AttributeError):
         repo.name = "new_name"
+
+
+def test_hf_source_type_enum():
+    """Verify that HFSourceType enum has the correct values."""
+    assert HFSourceType.DATASET.value == "dataset"
+    assert HFSourceType.MODEL.value == "model"
+
+
+def test_hf_source_creation():
+    """Verify that an HFSource can be created with required fields."""
+    source = HFSource(
+        name="bert_base",
+        resource_id="google-bert/bert-base-uncased",
+        source_type=HFSourceType.MODEL,
+    )
+
+    assert source.name == "bert_base"
+    assert source.resource_id == "google-bert/bert-base-uncased"
+    assert source.source_type == HFSourceType.MODEL
+    assert source.is_active is True  # Default value
+
+
+def test_hf_source_is_immutable():
+    """Verify that HFSource is frozen (immutable)."""
+    source = HFSource(name="test", resource_id="test/test", source_type=HFSourceType.DATASET)
+
+    with pytest.raises(AttributeError):
+        source.name = "new_name"
