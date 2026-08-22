@@ -1,3 +1,4 @@
+from datetime import time
 from functools import lru_cache
 
 from pydantic import Field
@@ -62,6 +63,16 @@ class Settings(BaseSettings):
 
     hf_token: str | None = Field(
         default=None, description="Hugging Face API Token for authenticated requests."
+    )
+
+    acquisition_schedule_time: time = Field(
+        default=time(6, 0),
+        description="Time of day to run acquisition pipeline (HH:MM). Default: 06:00.",
+    )
+
+    acquisition_run_on_startup: bool = Field(
+        default=True,
+        description="Whether to run acquisition pipeline immediately on application startup.",
     )
 
 
