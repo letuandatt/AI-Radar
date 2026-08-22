@@ -19,6 +19,7 @@ from app.fetchers.registry import (
 from app.fetchers.rss import RSSFetcher
 from app.fetchers.rss_parser import RSSParser
 from app.models.result import AcquisitionResult, SourceError
+from app.storage.history import save_acquisition_result
 
 logger = get_logger(__name__)
 
@@ -181,5 +182,10 @@ class DefaultAcquisitionPipeline:
             result.total_articles,
             result.execution_time,
         )
+
+        try:
+            save_acquisition_result(result)
+        except Exception as e:
+            logger.error("Failed to save acquisition result: %s", e)
 
         return result
