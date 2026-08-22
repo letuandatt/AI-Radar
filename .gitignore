@@ -1,7 +1,7 @@
 .env
 .venv/
 
-app/data/
+data/
 docs/private-docs/
 working
 
