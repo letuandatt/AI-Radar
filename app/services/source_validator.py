@@ -141,7 +141,7 @@ class GitHubValidator:
             headers["Authorization"] = f"token {self._token}"
 
         try:
-            response = httpx.get(url, timeout=self._timeout, headers=headers)
+            response = httpx.get(url, timeout=self._timeout, headers=headers, follow_redirects=True)
 
             if response.status_code == 200:
                 logger.info("GitHub source validation passed: %s", source.name)
@@ -221,7 +221,7 @@ class HuggingFaceValidator:
             headers["Authorization"] = f"Bearer {self._token}"
 
         try:
-            response = httpx.get(url, timeout=self._timeout, headers=headers)
+            response = httpx.get(url, timeout=self._timeout, headers=headers, follow_redirects=True)
 
             if response.status_code == 200:
                 logger.info("HuggingFace source validation passed: %s", source.name)
