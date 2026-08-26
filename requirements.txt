@@ -13,3 +13,4 @@ langchain-cohere==0.6.0
 langchain-qdrant==1.1.0
 httpx==0.28.1
 feedparser==6.0.14
+beautifulsoup4==4.15.0
