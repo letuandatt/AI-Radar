@@ -21,3 +21,7 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests requiring external network access",
+    "slow: marks tests as slow running",
+]
