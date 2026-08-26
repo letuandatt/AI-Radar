@@ -21,7 +21,6 @@ end-to-end in a production-like environment.
 """
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -64,6 +63,7 @@ STATUS_FILE = DATA_DIR / "source_status.json"
 # ==============================================================================
 # Fixtures
 # ==============================================================================
+
 
 @pytest.fixture(autouse=True)
 def cleanup_data_dir():
@@ -132,6 +132,7 @@ def status_service(real_registries):
 # Stage 1: Pre-flight Validation (T108 Real)
 # ==============================================================================
 
+
 @pytest.mark.integration
 @pytest.mark.slow
 class TestStage1_Validation:
@@ -180,6 +181,7 @@ class TestStage1_Validation:
 # ==============================================================================
 # Stage 2: Source Configuration (T104 Real)
 # ==============================================================================
+
 
 @pytest.mark.integration
 @pytest.mark.slow
@@ -256,6 +258,7 @@ class TestStage2_Configuration:
 # Stage 3: Status Management (T106 Real)
 # ==============================================================================
 
+
 @pytest.mark.integration
 @pytest.mark.slow
 class TestStage3_StatusManagement:
@@ -290,9 +293,7 @@ class TestStage3_StatusManagement:
         rss_reg, _, _ = real_registries
 
         # First, register the source in registry (required for re-validation)
-        rss_reg.register(
-            RSSSource(name=REAL_RSS_SOURCE["name"], url=REAL_RSS_SOURCE["url"])
-        )
+        rss_reg.register(RSSSource(name=REAL_RSS_SOURCE["name"], url=REAL_RSS_SOURCE["url"]))
 
         # Mark as inactive first
         status_service.mark_inactive(
@@ -355,6 +356,7 @@ class TestStage3_StatusManagement:
 # Stage 4: Atomic Write & Persistence Verification
 # ==============================================================================
 
+
 @pytest.mark.integration
 @pytest.mark.slow
 class TestStage4_Persistence:
@@ -369,7 +371,7 @@ class TestStage4_Persistence:
 
         # Read file directly (not through storage)
         assert STATUS_FILE.exists()
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+        with open(STATUS_FILE, encoding="utf-8") as f:
             data = json.load(f)
 
         # Verify structure
@@ -418,14 +420,13 @@ class TestStage4_Persistence:
 # Stage 5: Full End-to-End Workflow
 # ==============================================================================
 
+
 @pytest.mark.integration
 @pytest.mark.slow
 class TestStage5_EndToEnd:
     """Stage 5: Execute the full workflow from validation → config → status."""
 
-    def test_full_workflow_new_source(
-            self, config_service, status_service, real_registries
-    ):
+    def test_full_workflow_new_source(self, config_service, status_service, real_registries):
         """Complete workflow: validate → register → simulate failure → reactivate.
 
         This is the MASTER test that exercises the full Sprint 08 pipeline.
@@ -453,7 +454,7 @@ class TestStage5_EndToEnd:
             config={"url": source_url},
         )
         assert config_result.is_valid is True
-        print(f"  ✓ Source registered in registry")
+        print("  ✓ Source registered in registry")
 
         # Step 3: Simulate runtime failure
         print("\n[Step 3] Simulate runtime failure...")
@@ -474,19 +475,19 @@ class TestStage5_EndToEnd:
             source_type="rss",
         )
         assert reactivation_result is True
-        print(f"  ✓ Re-activation successful (source still valid)")
+        print("  ✓ Re-activation successful (source still valid)")
 
         # Step 5: Verify final state
         print("\n[Step 5] Verify final state...")
         final_status = status_service.get_status(source_name)
         assert final_status.is_active is True
         assert final_status.error_message is None
-        print(f"  ✓ Source is active and healthy")
+        print("  ✓ Source is active and healthy")
 
         # Step 6: Verify file persistence
         print("\n[Step 6] Verify file persistence...")
         assert STATUS_FILE.exists()
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+        with open(STATUS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         assert source_name in data
         assert data[source_name]["is_active"] is True
