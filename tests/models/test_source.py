@@ -1,6 +1,7 @@
 """Tests for Source data models."""
 
 import pytest
+from pydantic import ValidationError
 
 from app.models.source import GitHubRepository, HFSource, HFSourceType, RSSSource
 
@@ -25,7 +26,7 @@ def test_rss_source_is_immutable():
     """Verify that RSSSource is frozen (immutable) to prevent accidental modification."""
     source = RSSSource(name="test", url="http://test.com")
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         source.name = "new_name"
 
 
@@ -50,7 +51,7 @@ def test_github_repository_is_immutable():
     """Verify that GitHubRepository is frozen (immutable)."""
     repo = GitHubRepository(name="test", owner="user", repo="repo")
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         repo.name = "new_name"
 
 
@@ -78,5 +79,5 @@ def test_hf_source_is_immutable():
     """Verify that HFSource is frozen (immutable)."""
     source = HFSource(name="test", resource_id="test/test", source_type=HFSourceType.DATASET)
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         source.name = "new_name"
