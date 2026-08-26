@@ -6,9 +6,11 @@ pipeline, filtering out noise and invalid data before expensive operations
 """
 
 from .data_cleaner import DataCleaner
+from .duplicate_detector import DuplicateDetector
 from .raw_validator import RawDataValidator
 
 __all__ = [
     "DataCleaner",
+    "DuplicateDetector",
     "RawDataValidator",
 ]
