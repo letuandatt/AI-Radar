@@ -2,14 +2,17 @@
 
 This module defines the canonical structures representing external data sources
 that the system can ingest data from.
+
+All models use Pydantic BaseModel with frozen=True to ensure immutability
+and enable JSON Schema generation for Schema-Driven UI.
 """
 
-from dataclasses import dataclass
 from enum import Enum
 
+from pydantic import BaseModel, ConfigDict
 
-@dataclass(frozen=True)
-class RSSSource:
+
+class RSSSource(BaseModel):
     """Represents an RSS feed source configuration.
 
     Attributes:
@@ -18,13 +21,14 @@ class RSSSource:
         is_active: Whether the source is currently enabled for fetching.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     name: str
     url: str
     is_active: bool = True
 
 
-@dataclass(frozen=True)
-class GitHubRepository:
+class GitHubRepository(BaseModel):
     """Represents a GitHub repository source configuration.
 
     Attributes:
@@ -33,6 +37,8 @@ class GitHubRepository:
         repo: The repository name.
         is_active: Whether the source is currently enabled for fetching.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     owner: str
@@ -47,8 +53,7 @@ class HFSourceType(str, Enum):
     MODEL = "model"
 
 
-@dataclass(frozen=True)
-class HFSource:
+class HFSource(BaseModel):
     """Represents a Hugging Face source configuration.
 
     Attributes:
@@ -57,6 +62,8 @@ class HFSource:
         source_type: The type of resource (dataset or model).
         is_active: Whether the source is currently enabled for fetching.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     resource_id: str
