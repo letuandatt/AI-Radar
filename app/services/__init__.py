@@ -1,5 +1,6 @@
 """Services layer for business logic."""
 
+from .source_config_service import SourceConfigService
 from .source_validator import (
     BaseValidator,
     GitHubValidator,
@@ -12,4 +13,5 @@ __all__ = [
     "GitHubValidator",
     "HuggingFaceValidator",
     "RSSValidator",
+    "SourceConfigService",
 ]
