@@ -25,3 +25,5 @@ markers = [
     "integration: marks tests as integration tests requiring external network access",
     "slow: marks tests as slow running",
 ]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
