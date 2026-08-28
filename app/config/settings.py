@@ -1,7 +1,7 @@
 from datetime import time
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +11,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    groq_api_key: str
+    groq_api_key: SecretStr
+    gemini_api_key: str
     cohere_api_key: str
 
     qdrant_url: str
@@ -21,6 +22,8 @@ class Settings(BaseSettings):
     zalo_app_secret: str
     zalo_access_token: str
     zalo_webhook_secret: str
+
+    llm_provider: str = Field(default="gemini", description="LLM provider to use.")
 
     rss_sources: list[dict[str, str]] = Field(
         default_factory=list,
