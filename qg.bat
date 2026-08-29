@@ -4,28 +4,9 @@ echo   RUNNING SMART QUALITY GATE
 echo ========================================
 
 :: ---------------------------------------------------------
-:: [1/4] RUFF CHECK (With Auto-Fix)
+:: [1/4] RUFF FORMAT (With Auto-Fix)
 :: ---------------------------------------------------------
-echo [1/4] Ruff Check (Linting)...
-ruff check .
-if %errorlevel% neq 0 (
-    echo [!] Linting errors found. Attempting auto-fix ^(ruff check . --fix^)...
-    ruff check . --fix
-
-    :: Check again to ensure all fixable errors are gone
-    ruff check .
-    if %errorlevel% neq 0 (
-        echo [X] Auto-fix incomplete. Unfixable linting errors remain. Please fix manually.
-        exit /b %errorlevel%
-    )
-    echo [+] Auto-fix successful!
-)
-echo [+] Ruff Check passed.
-
-:: ---------------------------------------------------------
-:: [2/4] RUFF FORMAT (With Auto-Fix)
-:: ---------------------------------------------------------
-echo [2/4] Ruff Format Check...
+echo [1/4] Ruff Format Check...
 ruff format --check .
 if %errorlevel% neq 0 (
     echo [!] Formatting issues found. Attempting auto-format ^(ruff format .^)...
@@ -40,6 +21,25 @@ if %errorlevel% neq 0 (
     echo [+] Auto-format successful!
 )
 echo [+] Ruff Format passed.
+
+:: ---------------------------------------------------------
+:: [2/4] RUFF CHECK (With Auto-Fix)
+:: ---------------------------------------------------------
+echo [2/4] Ruff Check (Linting)...
+ruff check .
+if %errorlevel% neq 0 (
+    echo [!] Linting errors found. Attempting auto-fix ^(ruff check . --fix^)...
+    ruff check . --fix
+
+    :: Check again to ensure all fixable errors are gone
+    ruff check .
+    if %errorlevel% neq 0 (
+        echo [X] Auto-fix incomplete. Unfixable linting errors remain. Please fix manually.
+        exit /b %errorlevel%
+    )
+    echo [+] Auto-fix successful!
+)
+echo [+] Ruff Check passed.
 
 :: ---------------------------------------------------------
 :: [3/4] PYTEST (Manual Fix Only)
