@@ -87,3 +87,8 @@ def compute_content_hash(url: str, title: str) -> str:
     content = f"{normalized_url}|{normalized_title}"
 
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def compute_text_hash(text: str) -> str:
+    """Compute SHA-256 hash of raw text content"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
