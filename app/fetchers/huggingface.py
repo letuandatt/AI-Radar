@@ -148,7 +148,7 @@ class HuggingFaceFetcher:
             List of model metadata dictionaries.
         """
         url = f"{self.BASE_URL}/models"
-        params: dict[str, str | int] = {"sort": "trending", "limit": limit}
+        params: dict[str, str | int] = {"sort": "trendingScore", "limit": limit}
         logger.info("Fetching trending models (limit=%d)", limit)
 
         try:
@@ -182,7 +182,7 @@ class HuggingFaceFetcher:
             List of dataset metadata dictionaries.
         """
         url = f"{self.BASE_URL}/datasets"
-        params: dict[str, str | int] = {"sort": "trending", "limit": limit}
+        params: dict[str, str | int] = {"sort": "trendingScore", "limit": limit}
         logger.info("Fetching trending datasets (limit=%d)", limit)
 
         try:
