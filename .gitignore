@@ -3,6 +3,7 @@
 
 data/
 docs/private-docs/
+dev/
 working
 
 __pycache__/
