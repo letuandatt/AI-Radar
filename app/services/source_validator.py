@@ -152,6 +152,19 @@ class GitHubValidator:
                     details={"url": url, "status_code": 404},
                 )
             elif response.status_code in [401, 403]:
+                if response.status_code == 403:
+                    rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
+                    if rate_limit_remaining == "0":
+                        return ValidationResult.failure(
+                            error_message="GitHub API rate limit exceeded. "
+                            "Set GITHUB_TOKEN in .env to increase limit.",
+                            details={"url": url, "status_code": 403, "rate_limit_remaining": 0},
+                        )
+                    else:
+                        return ValidationResult.failure(
+                            error_message="GitHub API returned 403 Forbidden",
+                            details={"url": url, "status_code": 403},
+                        )
                 return ValidationResult.failure(
                     error_message="Authentication failed or rate limit exceeded",
                     details={"url": url, "status_code": response.status_code},
