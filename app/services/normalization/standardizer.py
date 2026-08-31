@@ -170,7 +170,7 @@ class DataStandardizer:
             return ""
 
         try:
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html, "lxml")
             # Get text content, preserving structure
             text = soup.get_text(separator=" ", strip=True)
             return text
