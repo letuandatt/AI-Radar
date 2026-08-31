@@ -15,3 +15,4 @@ langchain-google-genai==4.3.6
 httpx==0.28.1
 feedparser==6.0.14
 beautifulsoup4==4.15.0
+lmxl==6.1.0
