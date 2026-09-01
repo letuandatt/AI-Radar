@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr
     gemini_api_key: str
     cohere_api_key: str
+    openrouter_api_key: str
 
     qdrant_url: str
     qdrant_api_key: str
