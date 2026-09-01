@@ -16,5 +16,4 @@ httpx==0.28.1
 feedparser==6.0.14
 beautifulsoup4==4.15.0
 lmxl==6.1.0
-langchain-openai==1.6.0
 langchain-openrouter==0.2.8
