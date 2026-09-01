@@ -16,7 +16,9 @@ import asyncio
 from pathlib import Path
 from typing import cast
 
+from groq import RateLimitError, InternalServerError, APIConnectionError, APITimeoutError
 from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables.retry import ExponentialJitterParams
 
 from app.core.logger import get_logger
 from app.models.enriched_article import EnrichedArticle
@@ -45,9 +47,9 @@ class MetadataExtractor:
         self,
         llm,
         sanitizer: ContentSanitizer,
-        max_concurrent: int = 5,
-        max_retries: int = 3,
-        retry_base_delay: float = 1.0,
+        max_concurrent: int = 2,
+        max_retries: int = 2,
+        retry_base_delay: float = 5.0,
     ) -> None:
         """Initialize the MetadataExtractor.
 
@@ -68,7 +70,19 @@ class MetadataExtractor:
         # .with_retry() adds automatic retry on failure (AI-003)
         self._structured_llm = llm.with_structured_output(ExtractionResult).with_retry(
             stop_after_attempt=max_retries,
-            wait_exponential_min=retry_base_delay,
+            wait_exponential_jitter=True,
+            exponential_jitter_params=ExponentialJitterParams(
+                initial=retry_base_delay,  # Thời gian chờ ban đầu (vd: 1.0s)
+                max=60.0,  # Thời gian chờ tối đa (60s)
+                exp_base=2,  # Base mũ: 1s → 2s → 4s → 8s...
+                jitter=1,  # Random jitter 0-1s để tránh thundering herd
+            ),
+            # retry_if_exception_type=(
+            #     RateLimitError,
+            #     InternalServerError,
+            #     APIConnectionError,
+            #     APITimeoutError,
+            # )
         )
 
         # Load prompt template from file (ARCH-001)
