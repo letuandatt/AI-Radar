@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from app.fetchers.github import GitHubParser
+from app.fetchers.github_parser import GitHubParser
 from app.models.source import GitHubRepository
 
 

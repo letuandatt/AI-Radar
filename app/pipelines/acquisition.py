@@ -9,8 +9,10 @@ import time
 from datetime import datetime
 
 from app.core.logger import get_logger
-from app.fetchers.github import GitHubFetcher, GitHubParser
-from app.fetchers.huggingface import HuggingFaceFetcher, HuggingFaceParser
+from app.fetchers.github import GitHubFetcher
+from app.fetchers.github_parser import GitHubParser
+from app.fetchers.huggingface import HuggingFaceFetcher
+from app.fetchers.huggingface_parser import HuggingFaceParser
 from app.fetchers.registry import (
     ConfigBasedGitHubRegistry,
     ConfigBasedHFRegistry,

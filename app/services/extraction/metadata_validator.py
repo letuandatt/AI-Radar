@@ -8,6 +8,7 @@ the Knowledge Object construction phase.
 import re
 
 from app.core.logger import get_logger
+from app.models.enriched_article import EnrichedArticle
 from app.models.metadata import ExtractionResult
 from app.models.validation import ValidationResult
 
@@ -121,3 +122,56 @@ class MetadataValidator:
                 "relevance_score": result.relevance_score,
             }
         )
+
+    def validate_enriched_batch(self, articles: list[EnrichedArticle]) -> list[EnrichedArticle]:
+        """Validate a batch of EnrichedArticles by checking their extraction.
+
+        Filters out articles where:
+        - extraction is None (extraction failed)
+        - extraction fails validation rules
+
+        Args:
+            articles: List of EnrichedArticles to validate.
+
+        Returns:
+            A new list containing only EnrichedArticles with valid extraction.
+        """
+        if not articles:
+            return []
+
+        logger.info("MetadataValidator processing %d enriched articles", len(articles))
+
+        valid_articles: list[EnrichedArticle] = []
+        removed_count = 0
+
+        for enriched in articles:
+            # Skip if extraction is None (extraction failed at LLM level)
+            if enriched.extraction is None:
+                removed_count += 1
+                logger.info(
+                    "EnrichedArticle removed | url=%s | reason=extraction is None",
+                    enriched.article.url,
+                )
+                continue
+
+            # Validate the ExtractionResult inside
+            result = self.validate(enriched.extraction)
+
+            if result.is_valid:
+                valid_articles.append(enriched)
+            else:
+                removed_count += 1
+                logger.info(
+                    "EnrichedArticle removed | url=%s | reason=%s",
+                    enriched.article.url,
+                    result.error_message,
+                )
+
+        logger.info(
+            "MetadataValidator completed: %d valid, %d removed out of %d total",
+            len(valid_articles),
+            removed_count,
+            len(articles),
+        )
+
+        return valid_articles

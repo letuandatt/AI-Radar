@@ -5,8 +5,6 @@ from the GitHub REST API, handling authentication, rate limits, and
 specific API error codes.
 """
 
-from datetime import datetime
-
 import httpx
 
 from app.config.settings import get_settings
@@ -16,7 +14,6 @@ from app.fetchers.exceptions import (
     GitHubAPIError,
     NetworkError,
 )
-from app.models.article import RawArticle
 from app.models.source import GitHubRepository
 
 logger = get_logger(__name__)
@@ -116,119 +113,119 @@ class GitHubFetcher:
         """Fetch issues (including pull requests) for the repository."""
         return self.fetch_json(source, "issues", params={"state": "all", "per_page": per_page})
 
+    # --- Discovery Methods (thêm vào GitHubFetcher class) ---
 
-class GitHubParser:
-    """Parses JSON data from GitHub API into RawArticle models.
+    def fetch_trending_repos(self, language: str = "python", since: str = "weekly") -> list[dict]:
+        """Fetch trending repositories from GitHub Search API.
 
-    This parser handles the specific JSON structures returned by the
-    GitHub REST API for commits and issues, transforming them into
-    the standardized RawArticle format.
-    """
-
-    def parse_commits(self, data: list[dict], source: GitHubRepository) -> list[RawArticle]:
-        """Parse a list of commit JSON objects into RawArticle models.
+        Uses GitHub Search API to find trending repos based on stars gained
+        in a given time period. This is a workaround since GitHub doesn't
+        expose the /trending page via API.
 
         Args:
-            data: List of commit dictionaries from GitHub API.
-            source: The source repository these commits belong to.
+            language: Programming language to filter by (e.g., "python").
+            since: Time period: "daily", "weekly", "monthly".
 
         Returns:
-            A list of parsed RawArticle instances.
+            List of repository search result dictionaries.
         """
-        articles: list[RawArticle] = []
+        # Calculate date threshold based on 'since'
+        from datetime import datetime, timedelta, timezone
 
-        for item in data:
-            commit_data = item.get("commit")
-            html_url = item.get("html_url")
+        now = datetime.now(timezone.utc)
+        if since == "daily":
+            threshold = now - timedelta(days=1)
+            min_stars = 50
+        elif since == "weekly":
+            threshold = now - timedelta(weeks=1)
+            min_stars = 100
+        else:  # monthly
+            threshold = now - timedelta(days=30)
+            min_stars = 500
 
-            # Defensive Parsing: Skip if essential data is missing
-            if not commit_data or not html_url:
-                logger.warning(
-                    "Skipping invalid commit from %s: missing commit data or html_url", source.name
-                )
-                continue
+        date_str = threshold.strftime("%Y-%m-%d")
+        query = f"language:{language} created:>{date_str} stars:>={min_stars}"
 
-            message = commit_data.get("message", "")
-            if not message:
-                logger.warning(
-                    "Skipping commit from %s with empty message: %s", source.name, html_url
-                )
-                continue
+        logger.info(
+            "Fetching trending repos: language=%s, since=%s, query='%s'",
+            language,
+            since,
+            query,
+        )
 
-            # Extract title (first line of commit message) and full content
-            title = message.split("\n")[0].strip()
-            content = message
+        return self._search_repositories(query, sort="stars", order="desc", per_page=30)
 
-            # Extract date from nested author object
-            author_data = commit_data.get("author") or {}
-            published_date = self._parse_iso_date(author_data.get("date"))
-
-            articles.append(
-                RawArticle(
-                    title=title,
-                    url=html_url,
-                    content=content,
-                    published_date=published_date,
-                    source_name=source.name,
-                )
-            )
-
-        logger.info("Parsed %d commits from %s", len(articles), source.name)
-        return articles
-
-    def parse_issues(self, data: list[dict], source: GitHubRepository) -> list[RawArticle]:
-        """Parse a list of issue JSON objects into RawArticle models.
+    def fetch_new_repos_by_topic(
+        self, topic: str, min_stars: int = 20, per_page: int = 20
+    ) -> list[dict]:
+        """Fetch newly created repositories matching a specific topic.
 
         Args:
-            data: List of issue dictionaries from GitHub API.
-            source: The source repository these issues belong to.
+            topic: GitHub topic to search (e.g., "llm", "agents", "rag").
+            min_stars: Minimum star count to filter results.
+            per_page: Number of results per page.
 
         Returns:
-            A list of parsed RawArticle instances.
+            List of repository search result dictionaries.
         """
-        articles: list[RawArticle] = []
+        from datetime import datetime, timedelta, timezone
 
-        for item in data:
-            title = item.get("title")
-            html_url = item.get("html_url")
+        # Search repos created in the last 30 days with the given topic
+        threshold = datetime.now(timezone.utc) - timedelta(days=30)
+        date_str = threshold.strftime("%Y-%m-%d")
+        query = f"topic:{topic} created:>{date_str} stars:>={min_stars}"
 
-            # Defensive Parsing: Skip if essential data is missing
-            if not title or not html_url:
-                logger.warning(
-                    "Skipping invalid issue from %s: missing title or html_url", source.name
-                )
-                continue
+        logger.info(
+            "Fetching new repos by topic: topic=%s, min_stars=%d, query='%s'",
+            topic,
+            min_stars,
+            query,
+        )
 
-            # Body can be None or empty string
-            content = item.get("body") or ""
-            published_date = self._parse_iso_date(item.get("created_at"))
+        return self._search_repositories(query, sort="stars", order="desc", per_page=per_page)
 
-            articles.append(
-                RawArticle(
-                    title=title,
-                    url=html_url,
-                    content=content,
-                    published_date=published_date,
-                    source_name=source.name,
-                )
-            )
+    def _search_repositories(
+        self, query: str, sort: str = "stars", order: str = "desc", per_page: int = 30
+    ) -> list[dict]:
+        """Internal helper to call GitHub Search API for repositories.
 
-        logger.info("Parsed %d issues from %s", len(articles), source.name)
-        return articles
+        Args:
+            query: Search query string.
+            sort: Sort field ("stars", "updated", "created").
+            order: Sort order ("asc" or "desc").
+            per_page: Number of results per page (max 100).
 
-    def _parse_iso_date(self, date_str: str | None) -> datetime | None:
-        """Convert GitHub's ISO 8601 date string to a datetime object.
-
-        GitHub returns dates like "2023-10-25T10:00:00Z".
-        Python's fromisoformat() doesn't handle the 'Z' suffix until Python 3.11,
-        so we replace it with '+00:00' for compatibility.
+        Returns:
+            List of repository dictionaries from search results.
         """
-        if not date_str:
-            return None
+        url = f"{self.BASE_URL}/search/repositories"
+        params: dict[str, str | int] = {
+            "q": query,
+            "sort": sort,
+            "order": order,
+            "per_page": min(per_page, 100),
+        }
+
+        logger.info("GitHub Search API: query='%s', sort=%s", query, sort)
+
         try:
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
-            return datetime.fromisoformat(date_str)
-        except ValueError as error:
-            logger.warning("Failed to parse date '%s': %s", date_str, error)
-            return None
+            response = httpx.get(url, headers=self._headers, timeout=self._timeout, params=params)
+            response.raise_for_status()
+            data: dict = response.json()
+            items: list[dict] = data.get("items", [])
+            logger.info("GitHub Search returned %d results", len(items))
+            return items
+
+        except httpx.TimeoutException as error:
+            logger.error("Timeout while searching GitHub: %s", error)
+            raise FetchTimeoutError(f"Timeout searching GitHub: {query}") from error
+
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            self._handle_http_error(status, url, error)
+
+        except httpx.RequestError as error:
+            logger.error("Network error while searching GitHub: %s", error)
+            raise NetworkError("Network error searching GitHub") from error
+
+        return []

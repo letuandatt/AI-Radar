@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr
     gemini_api_key: str
     cohere_api_key: str
+    openrouter_api_key: str
 
     qdrant_url: str
     qdrant_api_key: str
@@ -76,6 +77,48 @@ class Settings(BaseSettings):
     acquisition_run_on_startup: bool = Field(
         default=True,
         description="Whether to run acquisition pipeline immediately on application startup.",
+    )
+
+    # --- Discovery Config ---
+    github_discovery_enabled: bool = Field(
+        default=False,
+        description="Enable GitHub discovery (trending repos + new repos by topic)",
+    )
+
+    github_discovery_topics: list[str] = Field(
+        default_factory=lambda: ["llm", "agents", "rag", "machine-learning"],
+        description="Topics to search for new GitHub repositories",
+    )
+
+    github_discovery_min_stars: int = Field(
+        default=20,
+        description="Minimum stars for discovered GitHub repos",
+    )
+
+    github_discovery_trending_since: str = Field(
+        default="weekly",
+        description="Trending period: daily, weekly, or monthly",
+    )
+
+    hf_discovery_enabled: bool = Field(
+        default=False,
+        description="Enable HuggingFace discovery (daily papers + trending)",
+    )
+
+    hf_discovery_papers_limit: int = Field(
+        default=20,
+        description="Maximum number of daily papers to fetch",
+    )
+
+    hf_discovery_trending_limit: int = Field(
+        default=20,
+        description="Maximum number of trending models/datasets to fetch",
+    )
+
+    hf_discovery_papers_date: str | None = Field(
+        default=None,
+        description="Specific date for papers fetch (YYYY-MM-DD). Only used when mode='by_date'. "
+        "Defaults to today if None.",
     )
 
 
