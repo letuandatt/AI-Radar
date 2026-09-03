@@ -17,3 +17,5 @@ feedparser==6.0.14
 beautifulsoup4==4.15.0
 lmxl==6.1.0
 langchain-openrouter==0.2.8
+langchain-ollama==1.1.0
+ollama==0.6.2
