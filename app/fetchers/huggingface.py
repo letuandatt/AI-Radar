@@ -5,8 +5,6 @@ from the Hugging Face Hub API, handling authentication and specific
 API error codes.
 """
 
-from datetime import datetime
-
 import httpx
 
 from app.config.settings import get_settings
@@ -16,7 +14,6 @@ from app.fetchers.exceptions import (
     HuggingFaceAPIError,
     NetworkError,
 )
-from app.models.article import RawArticle
 from app.models.source import HFSource, HFSourceType
 
 logger = get_logger(__name__)
@@ -102,82 +99,148 @@ class HuggingFaceFetcher:
         logger.error(error_message)
         raise HuggingFaceAPIError(error_message) from error
 
+    def fetch_daily_papers(self, date: str | None = None) -> list[dict]:
+        """Fetch daily curated papers from HuggingFace Daily Papers API.
 
-class HuggingFaceParser:
-    """Parses JSON metadata from Hugging Face API into RawArticle models.
+        This is a goldmine for discovering important new AI research papers
+        curated by the HuggingFace team.
 
-    This parser handles the specific JSON structures returned by the
-    Hugging Face Hub API for datasets and models, transforming them into
-    the standardized RawArticle format for knowledge extraction.
-    """
-
-    def parse(self, data: dict, source: HFSource) -> list[RawArticle]:
-        """Parse Hugging Face metadata JSON into a list of RawArticle models.
-
-        Note: Hugging Face API returns a single dictionary per resource,
-        not a list. This method returns a list with 0 or 1 element for
-        consistency with other parsers.
-
-        Args:
-            data: The metadata dictionary from Hugging Face API.
-            source: The source configuration this data belongs to.
+        Endpoint: GET https://huggingface.co/api/daily_papers
 
         Returns:
-            A list containing 0 or 1 RawArticle instance.
+            List of paper dictionaries.
         """
-        resource_id = data.get("id") or data.get("modelId") or data.get("datasetId")
+        url = f"{self.BASE_URL}/daily_papers"
+        params: dict[str, str] = {}
+        if date:
+            params["date"] = date
 
-        # Defensive Parsing: Skip if essential identifier is missing
-        if not resource_id:
-            logger.warning(
-                "Skipping HF resource from %s: missing 'id', 'modelId', or 'datasetId'", source.name
-            )
-            return []
+        logger.info("Fetching HuggingFace Daily Papers (date=%s)", date or "latest")
 
-        # Extract title (prefer cardData.title, fallback to resource_id)
-        card_data = data.get("cardData") or {}
-        title = card_data.get("title") or resource_id
-
-        # Build URL based on source type
-        if source.source_type == HFSourceType.DATASET:
-            url = f"https://huggingface.co/datasets/{resource_id}"
-        else:  # MODEL
-            url = f"https://huggingface.co/{resource_id}"
-
-        # Extract content (description)
-        content = data.get("description") or card_data.get("description") or ""
-
-        # Parse last modified date
-        published_date = self._parse_iso_date(data.get("lastModified"))
-
-        article = RawArticle(
-            title=title,
-            url=url,
-            content=content,
-            published_date=published_date,
-            source_name=source.name,
-        )
-
-        logger.info("Parsed HF resource: %s (%s)", title, source.name)
-        return [article]
-
-    def _parse_iso_date(self, date_str: str | None) -> datetime | None:
-        """Convert Hugging Face's ISO 8601 date string to a datetime object.
-
-        Hugging Face returns dates like "2024-03-15T10:00:00.000Z".
-        Python's fromisoformat() doesn't handle the 'Z' suffix until Python 3.11,
-        so we replace it with '+00:00' for compatibility.
-        """
-        if not date_str:
-            return None
         try:
-            # Handle milliseconds and 'Z' suffix
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
-            # Remove milliseconds if present (e.g., ".000")
-            if "." in date_str:
-                date_str = date_str.split(".")[0] + date_str[date_str.rfind("+") :]
-            return datetime.fromisoformat(date_str)
-        except ValueError as error:
-            logger.warning("Failed to parse date '%s': %s", date_str, error)
-            return None
+            response = httpx.get(url, headers=self._headers, timeout=self._timeout, params=params)
+            response.raise_for_status()
+            data: list[dict] = response.json()
+            logger.info("Fetched %d daily papers", len(data))
+            return data
+
+        except httpx.TimeoutException as error:
+            logger.error("Timeout fetching daily papers: %s", error)
+            raise FetchTimeoutError("Timeout fetching daily papers") from error
+
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            self._handle_http_error(status, url, error)
+
+        except httpx.RequestError as error:
+            logger.error("Network error fetching daily papers: %s", error)
+            raise NetworkError("Network error fetching daily papers") from error
+
+        return []
+
+    def fetch_trending_models(self, limit: int = 20) -> list[dict]:
+        """Fetch trending models from HuggingFace API.
+
+        Args:
+            limit: Maximum number of models to return.
+
+        Returns:
+            List of model metadata dictionaries.
+        """
+        url = f"{self.BASE_URL}/models"
+        params: dict[str, str | int] = {"sort": "trendingScore", "limit": limit}
+        logger.info("Fetching trending models (limit=%d)", limit)
+
+        try:
+            response = httpx.get(url, headers=self._headers, timeout=self._timeout, params=params)
+            response.raise_for_status()
+            data: list[dict] = response.json()
+            logger.info("Fetched %d trending models", len(data))
+            return data
+
+        except httpx.TimeoutException as error:
+            logger.error("Timeout fetching trending models: %s", error)
+            raise FetchTimeoutError("Timeout fetching trending models") from error
+
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            self._handle_http_error(status, url, error)
+
+        except httpx.RequestError as error:
+            logger.error("Network error fetching trending models: %s", error)
+            raise NetworkError("Network error fetching trending models") from error
+
+        return []
+
+    def fetch_trending_datasets(self, limit: int = 20) -> list[dict]:
+        """Fetch trending datasets from HuggingFace API.
+
+        Args:
+            limit: Maximum number of datasets to return.
+
+        Returns:
+            List of dataset metadata dictionaries.
+        """
+        url = f"{self.BASE_URL}/datasets"
+        params: dict[str, str | int] = {"sort": "trendingScore", "limit": limit}
+        logger.info("Fetching trending datasets (limit=%d)", limit)
+
+        try:
+            response = httpx.get(url, headers=self._headers, timeout=self._timeout, params=params)
+            response.raise_for_status()
+            data: list[dict] = response.json()
+            logger.info("Fetched %d trending datasets", len(data))
+            return data
+
+        except httpx.TimeoutException as error:
+            logger.error("Timeout fetching trending datasets: %s", error)
+            raise FetchTimeoutError("Timeout fetching trending datasets") from error
+
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            self._handle_http_error(status, url, error)
+
+        except httpx.RequestError as error:
+            logger.error("Network error fetching trending datasets: %s", error)
+            raise NetworkError("Network error fetching trending datasets") from error
+
+        return []
+
+    def fetch_papers_by_date(self, date: str) -> list[dict]:
+        """Fetch papers published on a specific date from HuggingFace.
+
+        Unlike daily_papers (which returns curated/featured papers),
+        this endpoint returns papers actually submitted on that date.
+
+        Endpoint: GET https://huggingface.co/api/papers?date=YYYY-MM-DD
+
+        Args:
+            date: Date string in YYYY-MM-DD format (e.g., "2026-08-30").
+
+        Returns:
+            List of paper dictionaries published on that date.
+        """
+        url = f"{self.BASE_URL}/papers"
+        params: dict[str, str] = {"date": date}
+        logger.info("Fetching HuggingFace papers for date: %s", date)
+
+        try:
+            response = httpx.get(url, headers=self._headers, timeout=self._timeout, params=params)
+            response.raise_for_status()
+            data: list[dict] = response.json()
+            logger.info("Fetched %d papers for %s", len(data), date)
+            return data
+
+        except httpx.TimeoutException as error:
+            logger.error("Timeout fetching papers for %s: %s", date, error)
+            raise FetchTimeoutError(f"Timeout fetching papers for {date}") from error
+
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            self._handle_http_error(status, url, error)
+
+        except httpx.RequestError as error:
+            logger.error("Network error fetching papers for %s: %s", date, error)
+            raise NetworkError(f"Network error fetching papers for {date}") from error
+
+        return []

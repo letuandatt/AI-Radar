@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from app.fetchers.huggingface import HuggingFaceParser
+from app.fetchers.huggingface_parser import HuggingFaceParser
 from app.models.source import HFSource, HFSourceType
 
 
