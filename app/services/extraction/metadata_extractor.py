@@ -6,19 +6,20 @@ relevance_score) from NormalizedArticle objects using LLM.
 Architecture:
 - Uses LangChain for LLM abstraction (ARCH-002 multi-provider)
 - Async processing with semaphore-based concurrency control
-- Retry strategy with exponential backoff (AI-003)
 - Structured output via Pydantic schema (AI-001 + AI-004)
 - Content sanitization before LLM call (SEC-001)
 - Prompt template with <untrusted_data> boundary (ARCH-001)
+
+NOTE: Retry mechanism removed because we're using local Ollama, which has
+no rate limits or transient API errors. If Ollama crashes, retry won't help.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import cast
 
-from groq import RateLimitError, InternalServerError, APIConnectionError, APITimeoutError
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables.retry import ExponentialJitterParams
 
 from app.core.logger import get_logger
 from app.models.enriched_article import EnrichedArticle
@@ -32,11 +33,19 @@ logger = get_logger(__name__)
 _PROMPT_FILE = Path("prompts/extraction/metadata.md")
 
 
+class ContentTooShortError(Exception):
+    """Raised when article content is below the minimum length threshold.
+
+    These articles are skipped BEFORE calling the LLM to save compute resources
+    and avoid empty/invalid extraction results.
+    """
+
+
 class MetadataExtractor:
     """Extracts structured metadata from articles using LLM.
 
     This extractor uses LangChain for provider-agnostic LLM calls,
-    with async processing, retry strategy, and security sanitization.
+    with async processing, semaphore-based concurrency control, and security sanitization.
 
     Thread Safety:
         Uses asyncio.Semaphore for concurrency control.
@@ -48,42 +57,24 @@ class MetadataExtractor:
         llm,
         sanitizer: ContentSanitizer,
         max_concurrent: int = 2,
-        max_retries: int = 2,
-        retry_base_delay: float = 5.0,
+        min_content_length: int = 50,
     ) -> None:
         """Initialize the MetadataExtractor.
 
         Args:
-            llm: LangChain chat model (ChatGoogleGenerativeAI or ChatGroq).
+            llm: LangChain chat model (ChatOllama, ChatGoogleGenerativeAI or ChatGroq).
             sanitizer: ContentSanitizer instance for SEC-001 pre-processing.
             max_concurrent: Maximum concurrent LLM calls (semaphore limit).
-            max_retries: Maximum retry attempts for failed LLM calls.
-            retry_base_delay: Base delay in seconds for exponential backoff.
+            min_content_length: Articles with content shorter than this are
+                skipped without calling the LLM.
         """
         self._sanitizer = sanitizer
         self._max_concurrent = max_concurrent
-        self._max_retries = max_retries
-        self._retry_base_delay = retry_base_delay
+        self._min_content_length = min_content_length
 
-        # Create structured output chain with retry
+        # Create structured output chain (NO retry - local Ollama has no rate limits)
         # .with_structured_output() forces LLM to return ExtractionResult schema
-        # .with_retry() adds automatic retry on failure (AI-003)
-        self._structured_llm = llm.with_structured_output(ExtractionResult).with_retry(
-            stop_after_attempt=max_retries,
-            wait_exponential_jitter=True,
-            exponential_jitter_params=ExponentialJitterParams(
-                initial=retry_base_delay,  # Thời gian chờ ban đầu (vd: 1.0s)
-                max=60.0,  # Thời gian chờ tối đa (60s)
-                exp_base=2,  # Base mũ: 1s → 2s → 4s → 8s...
-                jitter=1,  # Random jitter 0-1s để tránh thundering herd
-            ),
-            # retry_if_exception_type=(
-            #     RateLimitError,
-            #     InternalServerError,
-            #     APIConnectionError,
-            #     APITimeoutError,
-            # )
-        )
+        self._structured_llm = llm.with_structured_output(ExtractionResult)
 
         # Load prompt template from file (ARCH-001)
         self._prompt = self._load_prompt_template()
@@ -92,9 +83,9 @@ class MetadataExtractor:
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
         logger.info(
-            "MetadataExtractor initialized: max_concurrent=%d, max_retries=%d",
+            "MetadataExtractor initialized: max_concurrent=%d, min_content_length=%d",
             max_concurrent,
-            max_retries,
+            min_content_length,
         )
 
     def _load_prompt_template(self) -> PromptTemplate:
@@ -132,10 +123,19 @@ class MetadataExtractor:
             logger.debug("MetadataExtractor received empty batch")
             return []
 
-        logger.info("MetadataExtractor processing batch of %d articles", len(articles))
+        total = len(articles)
+        logger.info("=" * 80)
+        logger.info("METADATA EXTRACTION BATCH START")
+        logger.info("Total articles: %d", total)
+        logger.info("=" * 80)
+
+        batch_start_time = time.time()
 
         # Create tasks with semaphore-limited concurrency
-        tasks = [self._extract_with_semaphore(article) for article in articles]
+        tasks = [
+            self._extract_with_semaphore(article, idx, total)
+            for idx, article in enumerate(articles)
+        ]
 
         # Run all tasks concurrently, capture exceptions per-task
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -144,14 +144,27 @@ class MetadataExtractor:
         enriched_articles: list[EnrichedArticle] = []
         success_count = 0
         failed_count = 0
+        skipped_count = 0
 
         for article, result in zip(articles, results):
-            if isinstance(result, Exception):
+            # Handle skipped articles (content too short)
+            if isinstance(result, ContentTooShortError):
+                skipped_count += 1
+                enriched_articles.append(
+                    EnrichedArticle(
+                        article=article,
+                        extraction=None,
+                        extraction_status="skipped",
+                        extraction_error=str(result),
+                    )
+                )
+            elif isinstance(result, Exception):
                 # Extraction failed with exception
                 failed_count += 1
                 logger.error(
-                    "[%s] Extraction failed with exception: %s",
+                    "FAILED: [%s] %s - %s",
                     article.article_id[:16],
+                    article.title[:60],
                     str(result),
                 )
                 enriched_articles.append(
@@ -176,8 +189,9 @@ class MetadataExtractor:
                 # Unexpected result type
                 failed_count += 1
                 logger.error(
-                    "[%s] Unexpected extraction result type: %s",
+                    "UNEXPECTED: [%s] %s - Unexpected result type: %s",
                     article.article_id[:16],
+                    article.title[:60],
                     type(result).__name__,
                 )
                 enriched_articles.append(
@@ -189,82 +203,101 @@ class MetadataExtractor:
                     )
                 )
 
-        logger.info(
-            "MetadataExtractor batch completed: %d success, %d failed out of %d total",
-            success_count,
-            failed_count,
-            len(articles),
-        )
+        batch_elapsed = time.time() - batch_start_time
+
+        # Summary
+        logger.info("=" * 80)
+        logger.info("METADATA EXTRACTION BATCH COMPLETED")
+        logger.info("Total time: %.2fs", batch_elapsed)
+        logger.info("Results:")
+        logger.info("  ✓ Success: %d (%.1f%%)", success_count, success_count / total * 100)
+        logger.info("  ⊘ Skipped: %d (%.1f%%)", skipped_count, skipped_count / total * 100)
+        logger.info("  ✗ Failed:  %d (%.1f%%)", failed_count, failed_count / total * 100)
+        logger.info("=" * 80)
 
         return enriched_articles
 
-    async def _extract_with_semaphore(self, article: NormalizedArticle) -> ExtractionResult:
+    async def _extract_with_semaphore(
+        self, article: NormalizedArticle, current_idx: int, total: int
+    ) -> ExtractionResult:
         """Extract metadata with semaphore-limited concurrency.
 
         Args:
             article: The article to extract metadata from.
+            current_idx: Current article index (for progress tracking).
+            total: Total number of articles in batch.
 
         Returns:
             ExtractionResult with extracted metadata.
         """
         async with self._semaphore:
-            return await self.extract_single(article)
+            return await self.extract_single(article, current_idx, total)
 
-    async def extract_single(self, article: NormalizedArticle) -> ExtractionResult:
+    async def extract_single(
+        self, article: NormalizedArticle, current_idx: int, total: int
+    ) -> ExtractionResult:
         """Extract metadata from a single article.
 
         Pipeline:
-        1. Sanitize content (SEC-001)
-        2. Build prompt with <untrusted_data> boundary
-        3. Call LLM with structured output
-        4. Return parsed ExtractionResult
+        1. Pre-filter: skip if content too short
+        2. Sanitize content (SEC-001)
+        3. Build prompt with <untrusted_data> boundary
+        4. Call LLM with structured output
+        5. Return parsed ExtractionResult
 
         Args:
             article: The NormalizedArticle to extract metadata from.
+            current_idx: Current article index (for progress tracking).
+            total: Total number of articles in batch.
 
         Returns:
             ExtractionResult with extracted metadata.
 
         Raises:
-            Exception: If LLM call fails after all retries.
+            ContentTooShortError: If content is below min_content_length.
+            Exception: If LLM call fails.
         """
+        start_time = time.time()
         article_id_prefix = article.article_id[:16]
+        progress_prefix = f"[{current_idx + 1}/{total}]"
 
-        # Step 1: Sanitize content (SEC-001 pre-processing)
-        logger.info(
-            "[%s] Sanitizing content (%d chars)",
-            article_id_prefix,
-            len(article.content),
-        )
+        # Step 1: Pre-filter content quá ngắn TRƯỚC khi gọi LLM
+        content_length = len(article.content.strip())
+        if content_length < self._min_content_length:
+            logger.info(
+                "%s [%s] SKIPPED (content too short: %d chars)",
+                progress_prefix,
+                article_id_prefix,
+                content_length,
+            )
+            raise ContentTooShortError(
+                f"content length {content_length} < min {self._min_content_length}"
+            )
+
+        # Step 2: Sanitize content (SEC-001 pre-processing)
         sanitized_content = self._sanitizer.sanitize(article.content)
 
-        logger.info(
-            "[%s] Content sanitized: %d -> %d chars",
-            article_id_prefix,
-            len(article.content),
-            len(sanitized_content),
-        )
-
-        # Step 2: Build chain (prompt | structured_llm)
+        # Step 3: Build chain (prompt | structured_llm)
         chain = self._prompt | self._structured_llm
 
-        # Step 3: Call LLM (async)
-        logger.info(
-            "[%s] Calling LLM for metadata extraction",
-            article_id_prefix,
-        )
-
+        # Step 4: Call LLM (async)
         result = cast(
             ExtractionResult,
             cast(object, await chain.ainvoke({"content_text": sanitized_content})),
         )
 
+        elapsed = time.time() - start_time
+
+        # Log success with timing
         logger.info(
-            "[%s] LLM extraction completed: %d topics, %d entities, score=%.2f",
+            "%s [%s] ✓ %d topics, %d entities, score=%.2f (%.1fs) | %s",
+            progress_prefix,
             article_id_prefix,
             len(result.topics),
             len(result.entities),
             result.relevance_score,
+            elapsed,
+            article.title[:50],
         )
 
         return result
