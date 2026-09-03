@@ -123,9 +123,7 @@ class MetadataValidator:
             }
         )
 
-    def validate_enriched_batch(
-            self, articles: list[EnrichedArticle]
-    ) -> list[EnrichedArticle]:
+    def validate_enriched_batch(self, articles: list[EnrichedArticle]) -> list[EnrichedArticle]:
         """Validate a batch of EnrichedArticles by checking their extraction.
 
         Filters out articles where:
