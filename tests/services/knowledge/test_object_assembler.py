@@ -29,7 +29,10 @@ def validator() -> KnowledgeObjectValidator:
 
 @pytest.fixture
 def store(tmp_path: Path) -> FileKnowledgeStore:
-    return FileKnowledgeStore(file_path=tmp_path / "test_store.json")
+    import uuid
+
+    unique_path = tmp_path / f"test_store_{uuid.uuid4()}.json"
+    return FileKnowledgeStore(file_path=unique_path)
 
 
 @pytest.fixture
@@ -164,21 +167,33 @@ class TestIdempotentAssembly:
         # First run: creates all
         result1 = assembler.assemble(articles)
         assert result1.created_count == 2
+        assert result1.updated_count == 0
+        assert result1.skipped_count == 0
 
         # Second run: all updates, no new creates
         result2 = assembler.assemble(articles)
         assert result2.created_count == 0
-        assert result2.updated_count == 2
+        assert result2.updated_count == 0
+        assert result2.skipped_count == 2
 
     def test_incremental_assembly(
         self,
         assembler: KnowledgeObjectAssembler,
         sample_extraction: ExtractionResult,
     ) -> None:
-        """Adding new articles to existing data creates only new ones."""
+        """Adding new articles to existing data.
+
+        batch_1:
+            - a1
+
+        batch_2:
+            - a1 (same content) -> skipped
+            - a2 (new identity + new content) -> created
+        """
         batch_1 = [
             _make_enriched_article(article_id="a1", extraction=sample_extraction),
         ]
+
         batch_2 = [
             _make_enriched_article(article_id="a1", extraction=sample_extraction),
             _make_enriched_article(
@@ -191,8 +206,9 @@ class TestIdempotentAssembly:
         assembler.assemble(batch_1)
         result = assembler.assemble(batch_2)
 
-        assert result.created_count == 1  # Only a2 is new
-        assert result.updated_count == 1  # a1 is updated
+        assert result.created_count == 1
+        assert result.updated_count == 0
+        assert result.skipped_count == 1
 
 
 # ==============================================================================
@@ -212,6 +228,7 @@ class TestAssemblyResult:
             invalid_count=1,
             created_count=5,
             updated_count=2,
+            skipped_count=0,
         )
         with pytest.raises(AttributeError):
             result.total_input = 99  # type: ignore[misc]
