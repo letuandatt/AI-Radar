@@ -1,4 +1,3 @@
-# app/services/knowledge/object_assembler.py
 """Orchestrator service for the Knowledge Object assembly pipeline.
 
 Coordinates the full flow: build → validate → persist.
@@ -28,6 +27,7 @@ class AssemblyResult:
         invalid_count: Number of objects that failed validation.
         created_count: Number of new objects persisted.
         updated_count: Number of existing objects updated.
+        skipped_count: Number of objects skipped (idempotent).
     """
 
     total_input: int
@@ -36,6 +36,7 @@ class AssemblyResult:
     invalid_count: int
     created_count: int
     updated_count: int
+    skipped_count: int
 
 
 class KnowledgeObjectAssembler:
@@ -103,14 +104,20 @@ class KnowledgeObjectAssembler:
         # Stage 3: Persist (only valid objects)
         created_count = 0
         updated_count = 0
+        skipped_count = 0
+
         if valid_objects:
-            created_count = self._store.save_objects(valid_objects)
-            updated_count = valid_count - created_count
-            logger.info(
-                "Persistence stage: %d created, %d updated",
-                created_count,
-                updated_count,
-            )
+            save_result = self._store.save_objects(valid_objects)
+            created_count = save_result.created
+            updated_count = save_result.updated
+            skipped_count = save_result.skipped
+
+        logger.info(
+            "Persistence stage: %d created, %d updated, %d skipped",
+            created_count,
+            updated_count,
+            skipped_count,
+        )
 
         result = AssemblyResult(
             total_input=total_input,
@@ -119,17 +126,19 @@ class KnowledgeObjectAssembler:
             invalid_count=invalid_count,
             created_count=created_count,
             updated_count=updated_count,
+            skipped_count=skipped_count,
         )
 
         logger.info(
             "Assembly pipeline completed: "
-            "input=%d, built=%d, valid=%d, invalid=%d, created=%d, updated=%d",
+            "input=%d, built=%d, valid=%d, invalid=%d, created=%d, updated=%d, skipped=%d",
             result.total_input,
             result.built_count,
             result.valid_count,
             result.invalid_count,
             result.created_count,
             result.updated_count,
+            result.skipped_count,
         )
 
         return result
