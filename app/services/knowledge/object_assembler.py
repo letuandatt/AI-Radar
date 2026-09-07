@@ -12,7 +12,7 @@ from app.core.logger import get_logger
 from app.models.enriched_article import EnrichedArticle
 from app.services.knowledge.object_builder import ObjectBuilder
 from app.services.knowledge.object_validator import KnowledgeObjectValidator
-from app.storage.knowledge_store import KnowledgeStore
+from app.storage.knowledge.knowledge_store import KnowledgeStore
 
 logger = get_logger(__name__)
 
