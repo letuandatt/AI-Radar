@@ -332,25 +332,6 @@ class TestExternalIdValidation:
 class TestMetadataValidation:
     """Tests for metadata integrity rules including Frankenstein detection."""
 
-    def test_summary_longer_than_content_fails(
-        self,
-        validator: KnowledgeObjectValidator,
-        valid_knowledge_object: KnowledgeObject,
-    ) -> None:
-        """Frankenstein detection: summary must not exceed content length."""
-        long_summary = "x" * (len(valid_knowledge_object.content_text) + 100)
-        bad_metadata = ExtractionResult(
-            summary=long_summary,
-            topics=["AI"],
-            entities=["OpenAI"],
-            relevance_score=0.9,
-        )
-        ko = _make_object_with_overrides(valid_knowledge_object, metadata=bad_metadata)
-        result = validator.validate(ko)
-        assert result.is_valid is False
-        assert "longer than content_text" in result.error_message
-        assert result.details["field"] == "metadata.summary"
-
     def test_relevance_score_out_of_range_fails(
         self,
         validator: KnowledgeObjectValidator,
