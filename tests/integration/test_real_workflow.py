@@ -94,7 +94,7 @@ def real_registries():
     # Tạo một object Settings giả lập hợp lệ để thỏa mãn constructor của Registry
     dummy_settings = Settings(
         groq_api_key="test_key",
-        gemini_api_key="test_key",
+        openrouter_api_key="test_key",
         cohere_api_key="test_key",
         qdrant_url="http://localhost:6333",
         qdrant_api_key="test_key",
