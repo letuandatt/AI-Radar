@@ -4,7 +4,8 @@
 
 ### Knowledge Intelligence System for AI Research
 
-Automatically collect, process, organize, and retrieve AI knowledge through Daily Intelligence and Semantic Question Answering.
+<div align="center">Automatically collect, process, organize, and retrieve AI knowledge through Daily Intelligence</div>
+<div align="center">and Semantic Question Answering.</div>
 
 ![Status](https://img.shields.io/badge/Status-Documentation%20Phase-orange)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
