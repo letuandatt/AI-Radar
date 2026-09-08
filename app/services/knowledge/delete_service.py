@@ -8,6 +8,7 @@ Hard-delete only when permanent=True or via retention policy.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.core.logger import get_logger
 from app.storage.knowledge.sqlite_store import SQLiteKnowledgeStore
@@ -87,18 +88,29 @@ class KnowledgeDeleteService:
 
         return purged_count
 
-    def cleanup_orphaned_vectors(self) -> int:
+    def cleanup_orphaned_vectors(self, vector_sync_service: Any | None = None) -> int:
         """Cleanup orphaned vectors in Vector Store.
 
-        Note: Placeholder for Sprint 15 (Vector Storage).
         When Vector Store is implemented, this method will delete
         vectors that no longer have corresponding KnowledgeObjects.
 
         Returns:
             Number of orphaned vectors cleaned up.
         """
+        if vector_sync_service is None:
+            logger.info(
+                "cleanup_orphaned_vectors: VectorSyncService not provided. No vectors cleaned up."
+            )
+            return 0
+
+        # Get all active (non-deleted) KnowledgeObject IDs from SQLite
+        all_objects = self._store.get_all()
+        valid_ids = {obj.id for obj in all_objects}
+
         logger.info(
-            "cleanup_orphaned_vectors: Vector Store cleanup deferred to Sprint 15. "
-            "No vectors cleaned up."
+            "cleanup_orphaned_vectors: Found %d active KnowledgeObjects",
+            len(valid_ids),
         )
-        return 0
+
+        # Delegate to VectorSyncService
+        return vector_sync_service.delete_orphaned_vectors(valid_ids)  # type: ignore[no-any-return]
