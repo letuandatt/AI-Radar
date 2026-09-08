@@ -7,11 +7,14 @@
 <div align="center">Automatically collect, process, organize, and retrieve AI knowledge through Daily Intelligence</div>
 <div align="center">and Semantic Question Answering.</div>
 
+<div>
+
 ![Status](https://img.shields.io/badge/Status-Documentation%20Phase-orange)
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Architecture](https://img.shields.io/badge/Architecture-Modular%20Monolith-lightgrey)
 
+</div>
 </div>
 
 ---
