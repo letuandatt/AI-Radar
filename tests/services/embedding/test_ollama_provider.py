@@ -93,4 +93,4 @@ class TestOllamaMetadata:
         assert provider.get_dimensions() == 768
 
     def test_get_model_name(self, provider: OllamaEmbeddingProvider) -> None:
-        assert provider.get_model_name() == "nomic-embed-text"
+        assert provider.get_model_name() == "nomic-embed-text-v2-moe"

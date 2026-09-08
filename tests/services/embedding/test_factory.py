@@ -15,7 +15,7 @@ class TestFactoryCreate:
         provider = EmbeddingProviderFactory.create("ollama")
 
         assert isinstance(provider, OllamaEmbeddingProvider)
-        assert provider.get_model_name() == "nomic-embed-text"
+        assert provider.get_model_name() == "nomic-embed-text-v2-moe"
 
     def test_create_cohere(self) -> None:
         """Factory creates CohereEmbeddingProvider with API key."""
