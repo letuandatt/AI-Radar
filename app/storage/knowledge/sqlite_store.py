@@ -7,6 +7,7 @@ and circuit breaker behavior.
 
 import sqlite3
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,24 @@ _SELECT_COLUMNS = """
     normalizer_version,
     extractor_version
 """
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    """Result of a batch_update() operation.
+
+    Attributes:
+        updated: Number of objects successfully updated.
+        skipped: Number of objects skipped (ID not found).
+    """
+
+    updated: int
+    skipped: int
+
+    @property
+    def total_processed(self) -> int:
+        """Total number of objects processed."""
+        return self.updated + self.skipped
 
 
 class SQLiteKnowledgeStore:
@@ -121,6 +140,33 @@ class SQLiteKnowledgeStore:
         self._circuit_breaker.record_success()
         return result  # type: ignore[no-any-return]
 
+    def get_by_id(self, obj_id: str) -> KnowledgeObject | None:
+        """Retrieve a KnowledgeObject by internal ID.
+
+        Args:
+            obj_id: The internal UUID of the object.
+
+        Returns:
+            The matching KnowledgeObject, or None if not found.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            row = conn.execute(
+                f"""
+                SELECT {_SELECT_COLUMNS}
+                FROM knowledge_objects
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (obj_id,),
+            ).fetchone()
+
+            if row is None:
+                return None
+            return self._row_to_knowledge_object(row)
+
     def get_by_external_id(self, external_id: str, source_type: str) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by external identity."""
         self._check_circuit()
@@ -184,6 +230,207 @@ class SQLiteKnowledgeStore:
             conn = self._conn_manager.get_connection()
             row = conn.execute("SELECT COUNT(*) FROM knowledge_objects").fetchone()
             return int(row[0])
+
+    # ------------------------------------------------------------------
+    # Update Operations
+    # ------------------------------------------------------------------
+
+    def update_by_id(self, obj_id: str, updates: dict[str, Any]) -> bool:
+        """Partial update: chỉ update fields được chỉ định.
+
+        Allowed fields (whitelist):
+            - title, content_text, source_url, published_at
+            - metadata (ExtractionResult)
+            - embedding_vector, vector_db_id
+
+        Forbidden fields (identity + immutable):
+            - id, source_type, source_name, external_id
+            - created_at, fetched_at, content_hash
+            - parser_version, normalizer_version, extractor_version
+
+        Args:
+            obj_id: Internal ID of the KnowledgeObject.
+            updates: Dict of field names to new values.
+
+        Returns:
+            True if updated, False if not found.
+
+        Raises:
+            ValueError: If updates contain forbidden fields.
+        """
+        FORBIDDEN_FIELDS = {
+            "id",
+            "source_type",
+            "source_name",
+            "external_id",
+            "created_at",
+            "fetched_at",
+            "parser_version",
+            "normalizer_version",
+            "extractor_version",
+        }
+
+        invalid = set(updates.keys()) & FORBIDDEN_FIELDS
+        if invalid:
+            raise ValueError(
+                f"Cannot update forbidden fields: {invalid}. "
+                f"Allowed fields: {set(updates.keys()) - FORBIDDEN_FIELDS}"
+            )
+
+        if not updates:
+            return False
+
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            # Check if exists
+            existing = conn.execute(
+                "SELECT id FROM knowledge_objects WHERE id = ? LIMIT 1",
+                (obj_id,),
+            ).fetchone()
+
+            if existing is None:
+                return False
+
+            # Build UPDATE query dynamically
+            set_clauses: list[str] = []
+            values: list[Any] = []
+
+            for field, value in updates.items():
+                if field == "metadata" and value is not None:
+                    # Serialize ExtractionResult to JSON
+                    set_clauses.append("metadata_json = ?")
+                    values.append(value.model_dump_json())
+                elif field == "published_at":
+                    set_clauses.append("published_at = ?")
+                    values.append(self._to_iso(value))
+                else:
+                    set_clauses.append(f"{field} = ?")
+                    values.append(value)
+
+            # Always update updated_at
+            now = datetime.now(timezone.utc).isoformat()
+            set_clauses.append("updated_at = ?")
+            values.append(now)
+
+            values.append(obj_id)
+
+            query = f"UPDATE knowledge_objects SET {', '.join(set_clauses)} WHERE id = ?"
+            conn.execute(query, values)
+            conn.commit()
+
+            logger.debug(
+                "Updated KnowledgeObject %s: fields=%s",
+                obj_id,
+                list(updates.keys()),
+            )
+            return True
+
+    def update_metadata_by_id(self, obj_id: str, new_metadata: ExtractionResult) -> bool:
+        """Update chỉ metadata JSON, giữ nguyên các field khác.
+
+        Args:
+            obj_id: Internal ID of the KnowledgeObject.
+            new_metadata: New ExtractionResult to replace existing.
+
+        Returns:
+            True if updated, False if not found.
+        """
+        return self.update_by_id(obj_id, {"metadata": new_metadata})
+
+    def update_content_by_id(self, obj_id: str, new_title: str, new_content: str) -> bool:
+        """Update title + content_text + recalculate content_hash.
+
+        Args:
+            obj_id: Internal ID of the KnowledgeObject.
+            new_title: New title.
+            new_content: New content text.
+
+        Returns:
+            True if updated, False if not found.
+        """
+        from app.core.utils import compute_text_hash
+
+        new_hash = compute_text_hash(new_content)
+        return self.update_by_id(
+            obj_id,
+            {
+                "title": new_title,
+                "content_text": new_content,
+                "content_hash": new_hash,
+            },
+        )
+
+    def touch_by_id(self, obj_id: str) -> bool:
+        """Chỉ update updated_at timestamp.
+
+        Dùng cho heartbeat, cache invalidation, hoặc marking as recently accessed.
+
+        Args:
+            obj_id: Internal ID of the KnowledgeObject.
+
+        Returns:
+            True if touched, False if not found.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            now = datetime.now(timezone.utc).isoformat()
+            cursor = conn.execute(
+                "UPDATE knowledge_objects SET updated_at = ? WHERE id = ?",
+                (now, obj_id),
+            )
+            conn.commit()
+
+            return cursor.rowcount > 0
+
+    def batch_update(self, objects: list[KnowledgeObject]) -> "UpdateResult":
+        """Explicit batch update (idempotent).
+
+        Objects phải có ID hợp lệ (đã tồn tại trong DB).
+        - Nếu ID không tồn tại → skip
+        - Nếu ID tồn tại → update toàn bộ mutable fields
+
+        Args:
+            objects: List of KnowledgeObjects to update.
+
+        Returns:
+            UpdateResult with updated and skipped counts.
+        """
+        self._check_circuit()
+
+        updated = 0
+        skipped = 0
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            with conn:
+                for obj in objects:
+                    existing = conn.execute(
+                        "SELECT id FROM knowledge_objects WHERE id = ? LIMIT 1",
+                        (obj.id,),
+                    ).fetchone()
+
+                    if existing is None:
+                        skipped += 1
+                        logger.debug("Skipped update for non-existent ID: %s", obj.id)
+                        continue
+
+                    self._update_object(conn, obj.id, obj)
+                    updated += 1
+
+        logger.info(
+            "batch_update completed: %d updated, %d skipped",
+            updated,
+            skipped,
+        )
+
+        return UpdateResult(updated=updated, skipped=skipped)
 
     def close(self) -> None:
         """Close the underlying database connection."""

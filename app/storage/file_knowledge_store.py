@@ -98,6 +98,10 @@ class FileKnowledgeStore:
         )
         return SaveResult(created=created, updated=updated, skipped=skipped)
 
+    def get_by_id(self, obj_id: str) -> KnowledgeObject | None:
+        """Retrieve a KnowledgeObject by its internal ID."""
+        return self._objects.get(obj_id)
+
     def get_by_external_id(self, external_id: str, source_type: str) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by its external identity."""
         for obj in self._objects.values():

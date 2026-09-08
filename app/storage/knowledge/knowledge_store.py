@@ -56,6 +56,10 @@ class KnowledgeStore(Protocol):
         """
         ...
 
+    def get_by_id(self, obj_id: str) -> KnowledgeObject | None:
+        """Retrieve a KnowledgeObject by its internal ID."""
+        ...
+
     def get_by_external_id(self, external_id: str, source_type: str) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by its external identity.
 
