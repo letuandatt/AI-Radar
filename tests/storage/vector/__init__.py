@@ -1,1 +1,1 @@
-"""Vector storage tests package."""
+"""Vector services tests package."""
