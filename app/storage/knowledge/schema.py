@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS knowledge_objects (
     updated_at TIMESTAMP NOT NULL,
     parser_version TEXT DEFAULT '1.0.0',
     normalizer_version TEXT DEFAULT '1.0.0',
-    extractor_version TEXT DEFAULT '1.0.0'
+    extractor_version TEXT DEFAULT '1.0.0',
+    deleted_at TIMESTAMP NULL DEFAULT NULL
 );
 """
 

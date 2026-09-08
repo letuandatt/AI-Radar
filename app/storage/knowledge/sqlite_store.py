@@ -95,6 +95,14 @@ class SQLiteKnowledgeStore:
             try:
                 for ddl in ALL_DDL_STATEMENTS:
                     conn.execute(ddl)
+
+                try:
+                    conn.execute(
+                        "ALTER TABLE knowledge_objects ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
                 conn.commit()
                 logger.info(
                     "SQLite schema initialized: %s",
@@ -140,14 +148,50 @@ class SQLiteKnowledgeStore:
         self._circuit_breaker.record_success()
         return result  # type: ignore[no-any-return]
 
-    def get_by_id(self, obj_id: str) -> KnowledgeObject | None:
+    def get_by_id(self, obj_id: str, include_deleted: bool = False) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by internal ID.
 
         Args:
             obj_id: The internal UUID of the object.
+            include_deleted: If True, also return soft-deleted objects.
 
         Returns:
             The matching KnowledgeObject, or None if not found.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            if include_deleted:
+                row = conn.execute(
+                    f"""
+                    SELECT {_SELECT_COLUMNS}
+                    FROM knowledge_objects
+                    WHERE id = ?
+                    LIMIT 1
+                    """,
+                    (obj_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    f"""
+                    SELECT {_SELECT_COLUMNS}
+                    FROM knowledge_objects
+                    WHERE id = ? AND deleted_at IS NULL
+                    LIMIT 1
+                    """,
+                    (obj_id,),
+                ).fetchone()
+
+            if row is None:
+                return None
+            return self._row_to_knowledge_object(row)
+
+    def get_by_external_id(self, external_id: str, source_type: str) -> KnowledgeObject | None:
+        """Retrieve a KnowledgeObject by external identity.
+
+        Only returns non-deleted objects.
         """
         self._check_circuit()
 
@@ -157,27 +201,7 @@ class SQLiteKnowledgeStore:
                 f"""
                 SELECT {_SELECT_COLUMNS}
                 FROM knowledge_objects
-                WHERE id = ?
-                LIMIT 1
-                """,
-                (obj_id,),
-            ).fetchone()
-
-            if row is None:
-                return None
-            return self._row_to_knowledge_object(row)
-
-    def get_by_external_id(self, external_id: str, source_type: str) -> KnowledgeObject | None:
-        """Retrieve a KnowledgeObject by external identity."""
-        self._check_circuit()
-
-        with self._op_lock:
-            conn = self._conn_manager.get_connection()
-            row = conn.execute(
-                f"""
-                SELECT {_SELECT_COLUMNS}
-                FROM knowledge_objects
-                WHERE external_id = ? AND source_type = ?
+                WHERE external_id = ? AND source_type = ? AND deleted_at IS NULL
                 LIMIT 1
                 """,
                 (external_id, source_type),
@@ -188,7 +212,10 @@ class SQLiteKnowledgeStore:
             return self._row_to_knowledge_object(row)
 
     def get_by_content_hash(self, content_hash: str) -> KnowledgeObject | None:
-        """Retrieve a KnowledgeObject by content hash."""
+        """Retrieve a KnowledgeObject by content hash.
+
+        Only returns non-deleted objects.
+        """
         self._check_circuit()
 
         with self._op_lock:
@@ -197,7 +224,7 @@ class SQLiteKnowledgeStore:
                 f"""
                 SELECT {_SELECT_COLUMNS}
                 FROM knowledge_objects
-                WHERE content_hash = ?
+                WHERE content_hash = ? AND deleted_at IS NULL
                 LIMIT 1
                 """,
                 (content_hash,),
@@ -208,7 +235,7 @@ class SQLiteKnowledgeStore:
             return self._row_to_knowledge_object(row)
 
     def get_all(self) -> list[KnowledgeObject]:
-        """Retrieve all stored KnowledgeObjects."""
+        """Retrieve all non-deleted KnowledgeObjects."""
         self._check_circuit()
 
         with self._op_lock:
@@ -217,19 +244,211 @@ class SQLiteKnowledgeStore:
                 f"""
                 SELECT {_SELECT_COLUMNS}
                 FROM knowledge_objects
+                WHERE deleted_at IS NULL
                 """
             ).fetchall()
 
             return [self._row_to_knowledge_object(row) for row in rows]
 
     def count(self) -> int:
-        """Return the total number of stored KnowledgeObjects."""
+        """Return the total number of non-deleted KnowledgeObjects."""
         self._check_circuit()
 
         with self._op_lock:
             conn = self._conn_manager.get_connection()
-            row = conn.execute("SELECT COUNT(*) FROM knowledge_objects").fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM knowledge_objects WHERE deleted_at IS NULL"
+            ).fetchone()
             return int(row[0])
+
+    def close(self) -> None:
+        """Close the underlying database connection."""
+        with self._op_lock:
+            self._conn_manager.close()
+
+    # ------------------------------------------------------------------
+    # Delete Operations
+    # ------------------------------------------------------------------
+
+    def delete_by_id(self, obj_id: str, permanent: bool = False) -> bool:
+        """Delete a KnowledgeObject by internal ID.
+
+        Args:
+            obj_id: The internal UUID of the object.
+            permanent: If True, hard-delete (remove row).
+                       If False (default), soft-delete (set deleted_at).
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            if permanent:
+                cursor = conn.execute(
+                    "DELETE FROM knowledge_objects WHERE id = ?",
+                    (obj_id,),
+                )
+            else:
+                now = datetime.now(timezone.utc).isoformat()
+                cursor = conn.execute(
+                    """
+                    UPDATE knowledge_objects
+                    SET deleted_at = ?
+                    WHERE id = ?
+                      AND deleted_at IS NULL
+                    """,
+                    (now, obj_id),
+                )
+
+            conn.commit()
+            deleted = cursor.rowcount > 0
+
+            if deleted:
+                mode = "hard" if permanent else "soft"
+                logger.info("Deleted KnowledgeObject %s (%s)", obj_id, mode)
+            else:
+                logger.debug("delete_by_id: ID %s not found or already deleted", obj_id)
+
+            return deleted
+
+    def delete_by_source(self, source_type: str, source_name: str, permanent: bool = False) -> int:
+        """Delete all KnowledgeObjects from a specific source.
+
+        Args:
+            source_type: The source type (e.g., "rss", "github").
+            source_name: The source name (e.g., "techcrunch").
+            permanent: If True, hard-delete. If False (default), soft-delete.
+
+        Returns:
+            Number of objects deleted.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            if permanent:
+                cursor = conn.execute(
+                    """
+                    DELETE
+                    FROM knowledge_objects
+                    WHERE source_type = ?
+                      AND source_name = ?
+                    """,
+                    (source_type, source_name),
+                )
+            else:
+                now = datetime.now(timezone.utc).isoformat()
+                cursor = conn.execute(
+                    """
+                    UPDATE knowledge_objects
+                    SET deleted_at = ?
+                    WHERE source_type = ?
+                      AND source_name = ?
+                      AND deleted_at IS NULL
+                    """,
+                    (now, source_type, source_name),
+                )
+
+            conn.commit()
+            deleted_count = cursor.rowcount
+
+            mode = "hard" if permanent else "soft"
+            logger.info(
+                "Deleted %d KnowledgeObjects from source %s/%s (%s)",
+                deleted_count,
+                source_type,
+                source_name,
+                mode,
+            )
+            return deleted_count
+
+    def delete_older_than(self, before: datetime, permanent: bool = True) -> int:
+        """Delete KnowledgeObjects with created_at older than the given datetime.
+
+        Args:
+            before: Cutoff datetime. Objects with created_at < before are affected.
+            permanent: If True (default), hard-delete.
+                       If False, soft-delete.
+
+        Returns:
+            Number of objects deleted.
+        """
+        self._check_circuit()
+
+        before_iso = before.isoformat()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            if permanent:
+                cursor = conn.execute(
+                    "DELETE FROM knowledge_objects WHERE created_at < ?",
+                    (before_iso,),
+                )
+            else:
+                now = datetime.now(timezone.utc).isoformat()
+                cursor = conn.execute(
+                    """
+                    UPDATE knowledge_objects
+                    SET deleted_at = ?
+                    WHERE created_at < ?
+                      AND deleted_at IS NULL
+                    """,
+                    (now, before_iso),
+                )
+
+            conn.commit()
+            deleted_count = cursor.rowcount
+
+            mode = "hard" if permanent else "soft"
+            logger.info(
+                "Deleted %d KnowledgeObjects older than %s (%s)",
+                deleted_count,
+                before_iso,
+                mode,
+            )
+            return deleted_count
+
+    def purge_expired_trash(self, before: datetime) -> int:
+        """Hard-delete soft-deleted objects whose deleted_at is older than cutoff.
+
+        This is used by retention policy to permanently remove objects
+        that have been soft-deleted for more than N days.
+
+        Args:
+            before: Cutoff datetime. Objects with deleted_at < before are purged.
+
+        Returns:
+            Number of objects purged.
+        """
+        self._check_circuit()
+
+        before_iso = before.isoformat()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            cursor = conn.execute(
+                """
+                DELETE
+                FROM knowledge_objects
+                WHERE deleted_at IS NOT NULL
+                  AND deleted_at < ?
+                """,
+                (before_iso,),
+            )
+            conn.commit()
+
+            purged_count = cursor.rowcount
+            logger.info(
+                "Purged %d expired soft-deleted KnowledgeObjects (deleted_at < %s)",
+                purged_count,
+                before_iso,
+            )
+            return purged_count
 
     # ------------------------------------------------------------------
     # Update Operations
@@ -432,11 +651,6 @@ class SQLiteKnowledgeStore:
 
         return UpdateResult(updated=updated, skipped=skipped)
 
-    def close(self) -> None:
-        """Close the underlying database connection."""
-        with self._op_lock:
-            self._conn_manager.close()
-
     # ------------------------------------------------------------------
     # Save internals
     # ------------------------------------------------------------------
@@ -537,8 +751,6 @@ class SQLiteKnowledgeStore:
 
     def _insert_object(self, conn: sqlite3.Connection, obj: KnowledgeObject) -> None:
         """Insert a new KnowledgeObject."""
-        now = datetime.now(timezone.utc).isoformat()
-
         conn.execute(
             """
             INSERT INTO knowledge_objects (
@@ -573,8 +785,8 @@ class SQLiteKnowledgeStore:
                 obj.metadata.model_dump_json(),
                 self._to_iso(obj.fetched_at),
                 self._to_iso(obj.published_at),
-                now,
-                now,
+                self._to_iso(obj.created_at),
+                self._to_iso(obj.updated_at),
                 obj.parser_version,
                 obj.normalizer_version,
                 obj.extractor_version,
