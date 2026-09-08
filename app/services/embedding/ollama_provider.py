@@ -1,7 +1,7 @@
 """Ollama Embedding Provider.
 
 Primary embedding provider using local Ollama server.
-Model: nomic-embed-text (768 dimensions).
+Model: nomic-embed-text-v2-moe (768 dimensions).
 """
 
 import ollama
@@ -22,10 +22,10 @@ class OllamaEmbeddingProvider:
     """Ollama-based embedding provider.
 
     Uses local Ollama server for embedding generation.
-    Default model: nomic-embed-text (768 dimensions).
+    Default model: nomic-embed-text-v2-moe (768 dimensions).
 
     Args:
-        model: Ollama model name (default: nomic-embed-text).
+        model: Ollama model name (default: nomic-embed-text-v2-moe).
         base_url: Ollama server URL (default: http://localhost:11434).
         timeout: Request timeout in seconds (default: 30).
         max_retries: Max retries for transient errors (default: 3).
@@ -34,7 +34,7 @@ class OllamaEmbeddingProvider:
 
     def __init__(
         self,
-        model: str = "nomic-embed-text",
+        model: str = "nomic-embed-text-v2-moe",
         base_url: str = "http://localhost:11434",
         timeout: float = 30.0,
         max_retries: int = 3,
@@ -115,7 +115,7 @@ class OllamaEmbeddingProvider:
             raise EmbeddingError(f"Ollama batch embedding failed: {e}") from e
 
     def get_dimensions(self) -> int:
-        """Return embedding dimensions for nomic-embed-text."""
+        """Return embedding dimensions for nomic-embed-text-v2-moe."""
         return 768
 
     def get_model_name(self) -> str:

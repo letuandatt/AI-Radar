@@ -16,7 +16,7 @@ class EmbeddingProviderFactory:
     """Factory for creating embedding providers.
 
     Supported providers:
-    - "ollama": Ollama local server (nomic-embed-text, 768 dims)
+    - "ollama": Ollama local server (nomic-embed-text-v2-moe, 768 dims)
     - "cohere": Cohere API (embed-multilingual-v3.0, 1024 dims)
     """
 
