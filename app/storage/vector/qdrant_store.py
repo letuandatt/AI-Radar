@@ -5,6 +5,8 @@ Supports idempotent upsert, payload filtering, and reliability patterns.
 """
 
 from collections.abc import Sequence
+from datetime import datetime
+from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
@@ -371,6 +373,138 @@ class QdrantVectorStore:
             raise VectorStoreError(f"Failed to count points: {e}") from e
 
     # ------------------------------------------------------------------
+    # Update Operations
+    # ------------------------------------------------------------------
+
+    def update_vector(
+        self,
+        point_id: str,
+        new_vector: list[float],
+        new_payload: dict[str, Any] | None = None,
+    ) -> bool:
+        """Update vector and payload for a single point.
+
+        Qdrant upsert overwrites existing point, so this effectively updates.
+        If point does not exist, a new one will be created.
+
+        Args:
+            point_id: The point ID to update.
+            new_vector: New embedding vector.
+            new_payload: New payload (metadata). If None, keeps existing payload.
+
+        Returns:
+            True if update succeeded.
+
+        Raises:
+            VectorStoreError: If update fails.
+        """
+        self._check_circuit()
+
+        try:
+            # If new_payload is None, fetch existing payload first
+            if new_payload is None:
+                existing = self.get_point(point_id)
+                if existing is None:
+                    logger.warning(
+                        "update_vector: Point %s not found, cannot update",
+                        point_id,
+                    )
+                    return False
+                new_payload = existing.payload
+
+            point = qdrant_models.PointStruct(
+                id=point_id,
+                vector=new_vector,
+                payload=new_payload,
+            )
+
+            self._client.upsert(
+                collection_name=self._collection_name,
+                points=[point],
+            )
+
+            self._circuit_breaker.record_success()
+            logger.info("Updated vector for point %s", point_id)
+            return True
+
+        except Exception as e:
+            self._circuit_breaker.record_failure()
+            logger.error("Failed to update vector for point %s: %s", point_id, e)
+            raise VectorStoreError(f"Failed to update vector: {e}") from e
+
+    def delete_by_knowledge_ids(self, ids: Sequence[str]) -> int:
+        """Delete multiple points by their knowledge IDs.
+
+        This is a convenience wrapper around delete_points().
+
+        Args:
+            ids: List of knowledge IDs (used as point IDs) to delete.
+
+        Returns:
+            Number of points deleted.
+        """
+        return self.delete_points(ids)  # type: ignore[no-any-return]
+
+    def reindex_collection(self) -> int:
+        """Delete all points from the collection (full clear).
+
+        Does NOT recreate the collection - just removes all data.
+        Use this before a full reindex operation.
+
+        Returns:
+            Number of points deleted (before clearing).
+        """
+        self._check_circuit()
+
+        try:
+            # Get count before deletion
+            count_before = self.count()
+
+            # Delete all points using filter match all
+            self._client.delete(
+                collection_name=self._collection_name,
+                points_selector=qdrant_models.FilterSelector(
+                    filter=qdrant_models.Filter(
+                        must=[],
+                    )
+                ),
+            )
+
+            self._circuit_breaker.record_success()
+            logger.info(
+                "Reindex: cleared %d points from collection %s",
+                count_before,
+                self._collection_name,
+            )
+            return count_before
+
+        except Exception as e:
+            self._circuit_breaker.record_failure()
+            logger.error("Failed to reindex collection: %s", e)
+            raise VectorStoreError(f"Failed to reindex collection: {e}") from e
+
+    def build_payload(self, ko: Any) -> dict[str, Any]:
+        """Build Qdrant payload from a KnowledgeObject.
+
+        Args:
+            ko: KnowledgeObject instance.
+
+        Returns:
+            Payload dict with all required fields.
+        """
+        return {
+            "source_type": ko.source_type,
+            "source_name": ko.source_name,
+            "external_id": ko.external_id,
+            "content_hash": ko.content_hash,
+            "title": ko.title,
+            "source_url": ko.source_url,
+            "published_at": self._to_iso(ko.published_at),
+            "topics": ko.metadata.topics,
+            "entities": ko.metadata.entities,
+        }
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -378,3 +512,14 @@ class QdrantVectorStore:
         """Close the Qdrant client connection."""
         self._client.close()
         logger.info("Qdrant client closed")
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_iso(value: datetime | None) -> str | None:
+        """Convert datetime to ISO string or None."""
+        if value is None:
+            return None
+        return value.isoformat()
