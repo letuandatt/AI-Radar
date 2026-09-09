@@ -158,3 +158,21 @@ class VectorSearchService:
         )
 
         return results
+
+    # ------------------------------------------------------------------
+    # Vector Retrieval
+    # ------------------------------------------------------------------
+
+    def get_vector(self, knowledge_id: str) -> list[float] | None:
+        """Retrieve the embedding vector for a knowledge object.
+
+        Args:
+            knowledge_id: Knowledge Object ID.
+
+        Returns:
+            Embedding vector, or None if not found.
+        """
+        point = self._qdrant_store.get_point(knowledge_id)
+        if point is None:
+            return None
+        return point.vector
