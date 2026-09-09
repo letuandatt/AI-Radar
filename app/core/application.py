@@ -18,6 +18,7 @@ from ..fetchers.registry import (
     initialize_source_registry,
 )
 from ..pipelines.acquisition import DefaultAcquisitionPipeline
+from ..services.repository import initialize_knowledge_repository
 from ..storage.base import get_storage, initialize_storage, shutdown_storage
 from .lifecycle import ApplicationLifecycle
 
@@ -58,6 +59,21 @@ def _init_storage() -> object:
 def _shutdown_storage(instance: object) -> None:
     """Shutdown the storage layer."""
     shutdown_storage()
+
+
+# ------------------------------------------------------------------
+# Knowledge Repository
+# ------------------------------------------------------------------
+
+
+def _init_repository():
+    """Initialize the Knowledge Repository stack."""
+    return initialize_knowledge_repository(get_settings())
+
+
+def _shutdown_repository(initializer):
+    """Gracefully shutdown the Knowledge Repository."""
+    initializer.shutdown()
 
 
 def _init_acquisition() -> DefaultAcquisitionPipeline:
@@ -139,6 +155,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
         _registry.register("logging", _init_logging, _shutdown_logging, priority=10)
         _registry.register("scheduler", _init_scheduler, _shutdown_scheduler, priority=20)
         _registry.register("storage", _init_storage, _shutdown_storage, priority=30)
+        _registry.register("repository", _init_repository, _shutdown_repository, priority=35)
         _registry.register("acquisition", _init_acquisition, _shutdown_acquisition, priority=40)
 
         # Start all components
