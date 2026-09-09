@@ -28,8 +28,15 @@ from app.storage.vector.config import (
     QDRANT_TIMEOUT,
     QDRANT_URL,
 )
+from app.storage.vector.index_config import VectorIndexConfig
 
 logger = get_logger(__name__)
+
+_PAYLOAD_FIELD_SCHEMA: dict[str, qdrant_models.PayloadSchemaType] = {
+    "published_at": qdrant_models.PayloadSchemaType.DATETIME,
+}
+
+_DEFAULT_PAYLOAD_SCHEMA = qdrant_models.PayloadSchemaType.KEYWORD
 
 
 class VectorStoreError(Exception):
@@ -61,6 +68,7 @@ class QdrantVectorStore:
         timeout: int = QDRANT_TIMEOUT,
         max_retries: int = QDRANT_MAX_RETRIES,
         circuit_breaker: CircuitBreaker | None = None,
+        index_config: VectorIndexConfig | None = None,
     ) -> None:
         self._url = url
         self._collection_name = collection_name
@@ -72,6 +80,7 @@ class QdrantVectorStore:
             recovery_timeout=QDRANT_CIRCUIT_RECOVERY_TIMEOUT,
         )
         self._client = QdrantClient(url=url, timeout=timeout)
+        self._index_config = index_config or VectorIndexConfig()
 
     # ------------------------------------------------------------------
     # Circuit Breaker Guard
@@ -111,20 +120,22 @@ class QdrantVectorStore:
             logger.error("Failed to check collection existence: %s", e)
             raise VectorStoreError(f"Failed to check collection: {e}") from e
 
-    @retry_on_transient_error(
-        max_retries=QDRANT_MAX_RETRIES,
-        base_delay=QDRANT_RETRY_BASE_DELAY,
-        retryable_exceptions=(Exception,),
-    )
-    def create_collection(self, name: str | None = None, dimensions: int | None = None) -> None:
-        """Create a new collection if it doesn't exist.
+    def create_collection(
+        self,
+        name: str | None = None,
+        dimensions: int | None = None,
+    ) -> None:
+        """Create a new collection if it does not exist.
+
+        HNSW parameters are taken from VectorIndexConfig. If no HNSW
+        values are configured, Qdrant defaults are kept.
 
         Args:
-            name: Collection name (defaults to configured collection).
-            dimensions: Vector dimensions (defaults to configured dimensions).
+            name: Collection name.
+            dimensions: Vector dimensions.
 
         Raises:
-            VectorStoreError: If dimensions not specified and not configured.
+            VectorStoreError: If dimensions are not specified.
         """
         self._check_circuit()
 
@@ -137,28 +148,52 @@ class QdrantVectorStore:
                 "Provide dimensions parameter or configure in constructor."
             )
 
+        self._create_collection_with_retry(collection, dims)
+
+    @retry_on_transient_error(
+        max_retries=QDRANT_MAX_RETRIES,
+        base_delay=QDRANT_RETRY_BASE_DELAY,
+        retryable_exceptions=(Exception,),
+    )
+    def _create_collection_with_retry(self, collection: str, dims: int) -> None:
+        """Internal retry wrapper for collection creation."""
         try:
-            self._client.create_collection(
-                collection_name=collection,
-                vectors_config=qdrant_models.VectorParams(
+            create_kwargs: dict[str, Any] = {
+                "collection_name": collection,
+                "vectors_config": qdrant_models.VectorParams(
                     size=dims,
                     distance=qdrant_models.Distance.COSINE,
                 ),
-            )
+            }
+
+            # Only add HNSW config if both m and ef_construct are specified
+            hnsw_params = self._index_config.build_hnsw_collection_params()
+            if hnsw_params and "m" in hnsw_params and "ef_construct" in hnsw_params:
+                create_kwargs["hnsw_config"] = qdrant_models.HnswConfigDiff(
+                    m=hnsw_params["m"],
+                    ef_construct=hnsw_params["ef_construct"],
+                )
+
+            if self._index_config.quantization_config is not None:
+                create_kwargs["quantization_config"] = self._index_config.quantization_config
+
+            self._client.create_collection(**create_kwargs)
             self._circuit_breaker.record_success()
+
             logger.info(
                 "Created Qdrant collection '%s' with %d dimensions",
                 collection,
                 dims,
             )
+
         except UnexpectedResponse as e:
             if e.status_code == 409:
-                # Collection already exists — not an error
                 self._circuit_breaker.record_success()
                 logger.info("Collection '%s' already exists", collection)
             else:
                 self._circuit_breaker.record_failure()
                 raise VectorStoreError(f"Failed to create collection: {e}") from e
+
         except Exception as e:
             self._circuit_breaker.record_failure()
             logger.error("Failed to create collection: %s", e)
@@ -172,6 +207,94 @@ class QdrantVectorStore:
         """
         if not self.collection_exists():
             self.create_collection(dimensions=dimensions)
+
+        self.ensure_payload_indexes()
+
+    # ------------------------------------------------------------------
+    # Payload Index Operations
+    # ------------------------------------------------------------------
+
+    def ensure_payload_indexes(self) -> int:
+        """Create payload indexes for configured filterable fields.
+
+        Returns:
+            Number of payload index fields processed.
+
+        Raises:
+            VectorStoreError: If payload index creation fails.
+        """
+        self._check_circuit()
+
+        fields = self._index_config.payload_index_fields
+        if not fields:
+            return 0
+
+        try:
+            for field_name in fields:
+                field_schema = _PAYLOAD_FIELD_SCHEMA.get(
+                    field_name,
+                    _DEFAULT_PAYLOAD_SCHEMA,
+                )
+
+                self._client.create_payload_index(
+                    collection_name=self._collection_name,
+                    field_name=field_name,
+                    field_schema=field_schema,
+                )
+
+            self._circuit_breaker.record_success()
+            logger.info(
+                "Ensured %d Qdrant payload indexes on collection '%s'",
+                len(fields),
+                self._collection_name,
+            )
+            return len(fields)
+
+        except Exception as e:
+            self._circuit_breaker.record_failure()
+            logger.error("Failed to create payload indexes: %s", e)
+            raise VectorStoreError(f"Failed to create payload indexes: {e}") from e
+
+    # ------------------------------------------------------------------
+    # Optimizer
+    # ------------------------------------------------------------------
+
+    def optimize_index(self) -> dict[str, Any]:
+        """Manually trigger Qdrant optimizer.
+
+        Returns:
+            Dict with optimizer/collection status.
+        """
+        self._check_circuit()
+
+        try:
+            self._client.update_collection(
+                collection_name=self._collection_name,
+                optimizer_config=qdrant_models.OptimizersConfigDiff(
+                    indexing_threshold=0,
+                ),
+            )
+
+            info = self._client.get_collection(self._collection_name)
+            self._circuit_breaker.record_success()
+
+            return {
+                "collection": self._collection_name,
+                "status": getattr(info, "status", None),
+                "points_count": getattr(info, "points_count", None),
+                "indexed_vectors_count": getattr(
+                    info,
+                    "indexed_vectors_count",
+                    None,
+                ),
+                "optimizer_status": getattr(info, "optimizer_status", None),
+                "estimated_completion_time": None,
+            }
+
+        except Exception as e:
+            self._circuit_breaker.record_failure()
+            logger.error("Failed to optimize index: %s", e)
+            raise VectorStoreError(f"Failed to optimize index: {e}") from e
 
     # ------------------------------------------------------------------
     # Point Operations
