@@ -18,7 +18,10 @@ from ..fetchers.registry import (
     initialize_source_registry,
 )
 from ..pipelines.acquisition import DefaultAcquisitionPipeline
-from ..services.repository import initialize_knowledge_repository
+from ..services.repository import (
+    create_application_services,
+    initialize_knowledge_repository,
+)
 from ..storage.base import get_storage, initialize_storage, shutdown_storage
 from .lifecycle import ApplicationLifecycle
 
@@ -61,19 +64,41 @@ def _shutdown_storage(instance: object) -> None:
     shutdown_storage()
 
 
-# ------------------------------------------------------------------
-# Knowledge Repository
-# ------------------------------------------------------------------
-
-
 def _init_repository():
-    """Initialize the Knowledge Repository stack."""
+    """Initialize the Knowledge Repository stack.
+
+    Creates SQLite store, vector store, BM25 index, and embedding provider.
+    Fails fast if critical components are unavailable.
+
+    Returns:
+        Initialized RepositoryInitializer instance.
+    """
     return initialize_knowledge_repository(get_settings())
 
 
-def _shutdown_repository(initializer):
+def _shutdown_repository(initializer) -> None:
     """Gracefully shutdown the Knowledge Repository."""
     initializer.shutdown()
+
+
+def _init_app_service():
+    """Initialize ApplicationService facade.
+
+    Uses factory from bootstrap layer to avoid accessing
+    database-specific properties from application core.
+    """
+    assert _registry is not None, "ComponentRegistry must be initialized"
+    initializer = _registry.get_component("repository")
+
+    return create_application_services(initializer)
+
+
+def _shutdown_app_service(app_service) -> None:
+    """Gracefully shutdown ApplicationService and its dependencies."""
+    try:
+        app_service.get_lifecycle().stop()
+    except Exception as e:
+        logger.error("Error shutting down ApplicationService: %s", e)
 
 
 def _init_acquisition() -> DefaultAcquisitionPipeline:
@@ -105,6 +130,18 @@ def _init_acquisition() -> DefaultAcquisitionPipeline:
         github_registry=get_github_registry(),
         hf_registry=get_hf_registry(),
     )
+
+    # Inject ApplicationService if available
+    try:
+        app_service = _registry.get_component("app_service")
+        pipeline.set_app_service(app_service)
+        logger.info("ApplicationService injected into acquisition pipeline")
+    except Exception as e:
+        logger.warning(
+            "Could not inject ApplicationService into acquisition pipeline: %s. "
+            "Pipeline will use fallback JSON storage.",
+            e,
+        )
 
     # Register as a scheduled job
     job = Job(
@@ -153,9 +190,20 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
 
         # Register components with priority
         _registry.register("logging", _init_logging, _shutdown_logging, priority=10)
+        _registry.register(
+            "repository",
+            _init_repository,
+            _shutdown_repository,
+            priority=15,
+        )
         _registry.register("scheduler", _init_scheduler, _shutdown_scheduler, priority=20)
         _registry.register("storage", _init_storage, _shutdown_storage, priority=30)
-        _registry.register("repository", _init_repository, _shutdown_repository, priority=35)
+        _registry.register(
+            "app_service",
+            _init_app_service,
+            _shutdown_app_service,
+            priority=35,
+        )
         _registry.register("acquisition", _init_acquisition, _shutdown_acquisition, priority=40)
 
         # Start all components
