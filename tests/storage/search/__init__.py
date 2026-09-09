@@ -1,0 +1,1 @@
+"""Search storage tests package."""
