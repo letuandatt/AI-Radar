@@ -47,3 +47,38 @@ def initialize_knowledge_repository(settings: Settings) -> RepositoryInitializer
     )
 
     return initializer
+
+
+def create_application_services(initializer: "RepositoryInitializer"):
+    """Create ApplicationService and all its dependencies from an initializer.
+
+    This factory function keeps database-specific property access
+    (e.g., initializer.qdrant_store) out of the application core module.
+
+    Args:
+        initializer: Initialized RepositoryInitializer.
+
+    Returns:
+        Fully wired ApplicationService instance.
+    """
+    from app.services.app_service import ApplicationService
+    from app.services.repository.access_service import RepositoryAccessService
+    from app.services.repository.lifecycle_service import RepositoryLifecycleService
+
+    access_service = RepositoryAccessService(
+        sqlite_store=initializer.sqlite_store,
+    )
+
+    lifecycle_service = RepositoryLifecycleService(
+        config=initializer.config,
+        sqlite_store=initializer.sqlite_store,
+        qdrant_store=initializer.qdrant_store,
+        bm25_index=initializer.bm25_index,
+    )
+    lifecycle_service.start()
+
+    return ApplicationService(
+        initializer=initializer,
+        access_service=access_service,
+        lifecycle_service=lifecycle_service,
+    )

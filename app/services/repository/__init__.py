@@ -1,7 +1,10 @@
 """Repository management services package."""
 
 from app.services.repository.access_service import RepositoryAccessService
-from app.services.repository.bootstrap import initialize_knowledge_repository
+from app.services.repository.bootstrap import (
+    create_application_services,
+    initialize_knowledge_repository,
+)
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.health_monitor import (
     HealthCheckResult,
@@ -37,6 +40,7 @@ from app.services.repository.query_models import (
 __all__ = [
     # Bootstrap
     "initialize_knowledge_repository",
+    "create_application_services",
     # Config
     "RepositoryConfig",
     # Initializer
