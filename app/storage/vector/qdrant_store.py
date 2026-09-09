@@ -496,6 +496,64 @@ class QdrantVectorStore:
             raise VectorStoreError(f"Failed to count points: {e}") from e
 
     # ------------------------------------------------------------------
+    # Vector Search (T164)
+    # ------------------------------------------------------------------
+
+    def search_vectors(
+        self,
+        query_vector: list[float],
+        query_filter: qdrant_models.Filter | None = None,
+        limit: int = 20,
+        with_payload: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Search for nearest neighbors using vector similarity.
+
+        Uses query_points API (Qdrant recommended).
+
+        Args:
+            query_vector: Query embedding vector.
+            query_filter: Optional Qdrant filter for pre-filtering.
+            limit: Maximum number of results.
+            with_payload: Whether to include payload in results.
+
+        Returns:
+            List of dicts with keys: id, score, payload.
+            Sorted by similarity score descending.
+
+        Raises:
+            VectorStoreError: If search fails.
+        """
+        self._check_circuit()
+
+        try:
+            response = self._client.query_points(
+                collection_name=self._collection_name,
+                query=query_vector,
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=with_payload,
+            )
+
+            self._circuit_breaker.record_success()
+
+            results: list[dict[str, Any]] = []
+            for point in response.points:
+                results.append(
+                    {
+                        "id": str(point.id),
+                        "score": float(point.score),
+                        "payload": point.payload or {},
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            self._circuit_breaker.record_failure()
+            logger.error("Failed to search vectors: %s", e)
+            raise VectorStoreError(f"Failed to search vectors: {e}") from e
+
+    # ------------------------------------------------------------------
     # Update Operations
     # ------------------------------------------------------------------
 
