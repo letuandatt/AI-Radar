@@ -109,6 +109,7 @@ class ApplicationService:
         self._initializer = initializer
         self._access_service = access_service
         self._lifecycle_service = lifecycle_service
+        self._retrieval_service = None
 
         # Build VectorSyncService from initializer components
         self._vector_sync = VectorSyncService(
@@ -369,3 +370,76 @@ class ApplicationService:
     def get_lifecycle(self) -> RepositoryLifecycleService:
         """Return the lifecycle service for backup/restore operations."""
         return self._lifecycle_service
+
+    # ------------------------------------------------------------------
+    # Retrieval Operations (T167.5)
+    # ------------------------------------------------------------------
+
+    def set_retrieval_service(self, retrieval_service) -> None:
+        """Inject RetrievalService after initialization.
+
+        Called by ComponentRegistry after retrieval_service is created.
+        Uses setter injection to avoid circular dependency.
+
+        Args:
+            retrieval_service: RetrievalService instance.
+        """
+        self._retrieval_service = retrieval_service
+        logger.info("RetrievalService injected into ApplicationService")
+
+    def search_knowledge_with_retrieval(
+        self,
+        query: str,
+        metadata_filter=None,
+        top_k: int = 10,
+        method: str = "hybrid",
+    ):
+        """Search knowledge using the unified retrieval interface.
+
+        This is the primary search method for MCP-001, Web Dashboard,
+        and Web Chat.
+
+        Args:
+            query: Search query text.
+            metadata_filter: Optional MetadataFilter for pre-filtering.
+            top_k: Maximum number of results.
+            method: Retrieval method ("vector", "keyword", "hybrid").
+
+        Returns:
+            RetrievalResponse with enriched results.
+
+        Raises:
+            RuntimeError: If RetrievalService is not available.
+        """
+        if self._retrieval_service is None:
+            raise RuntimeError(
+                "RetrievalService not available. Ensure it is injected via set_retrieval_service()."
+            )
+        return self._retrieval_service.search(
+            query=query,
+            metadata_filter=metadata_filter,
+            top_k=top_k,
+            method=method,
+        )
+
+    def get_related_items(self, knowledge_id: str, top_k: int = 5):
+        """Get items related to a specific knowledge object.
+
+        Args:
+            knowledge_id: ID of the knowledge object.
+            top_k: Maximum number of related items.
+
+        Returns:
+            RetrievalResponse with related items.
+
+        Raises:
+            RuntimeError: If RetrievalService is not available.
+        """
+        if self._retrieval_service is None:
+            raise RuntimeError(
+                "RetrievalService not available. Ensure it is injected via set_retrieval_service()."
+            )
+        return self._retrieval_service.get_related_items(
+            knowledge_id=knowledge_id,
+            top_k=top_k,
+        )
