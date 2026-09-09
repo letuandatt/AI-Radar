@@ -82,3 +82,43 @@ def create_application_services(initializer: "RepositoryInitializer"):
         access_service=access_service,
         lifecycle_service=lifecycle_service,
     )
+
+
+def create_retrieval_service(initializer: "RepositoryInitializer"):
+    """Create RetrievalService and all its dependencies from an initializer.
+
+    This factory function keeps database-specific wiring
+    (QdrantVectorStore, BM25Index, EmbeddingProvider) out of
+    the application core module.
+
+    Args:
+        initializer: Initialized RepositoryInitializer.
+
+    Returns:
+        Fully wired RetrievalService instance.
+    """
+    from app.services.retrieval.fusion_retriever import FusionRetriever
+    from app.services.retrieval.metadata_filter import MetadataFilterEngine
+    from app.services.retrieval.retrieval_service import RetrievalService
+    from app.services.retrieval.vector_search import VectorSearchService
+
+    filter_engine = MetadataFilterEngine()
+
+    vector_search = VectorSearchService(
+        qdrant_store=initializer.qdrant_store,
+        embedding_provider=initializer.embedding_provider,
+        filter_engine=filter_engine,
+    )
+
+    fusion_retriever = FusionRetriever(
+        vector_search=vector_search,
+        bm25_index=initializer.bm25_index,
+    )
+
+    return RetrievalService(
+        vector_search=vector_search,
+        fusion_retriever=fusion_retriever,
+        bm25_index=initializer.bm25_index,
+        sqlite_store=initializer.sqlite_store,
+        filter_engine=filter_engine,
+    )

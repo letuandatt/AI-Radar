@@ -3,6 +3,7 @@
 from app.services.repository.access_service import RepositoryAccessService
 from app.services.repository.bootstrap import (
     create_application_services,
+    create_retrieval_service,
     initialize_knowledge_repository,
 )
 from app.services.repository.config import RepositoryConfig
@@ -41,6 +42,7 @@ __all__ = [
     # Bootstrap
     "initialize_knowledge_repository",
     "create_application_services",
+    "create_retrieval_service",
     # Config
     "RepositoryConfig",
     # Initializer
