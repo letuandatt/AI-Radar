@@ -443,6 +443,180 @@ class SQLiteKnowledgeStore:
         )
 
     # ------------------------------------------------------------------
+    # Cursor-based Pagination
+    # ------------------------------------------------------------------
+
+    def query_by_cursor(
+        self,
+        cursor: str | None = None,
+        limit: int = 50,
+        source_type: str | None = None,
+        source_name: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[KnowledgeObject]:
+        """Query KnowledgeObjects using cursor-based pagination.
+
+        Cursor is the created_at timestamp (ISO string) of the last item
+        from the previous page. Results are ordered by created_at DESC.
+
+        Args:
+            cursor: created_at ISO string of last item from previous page.
+                    None for first page.
+            limit: Maximum number of items to return.
+            source_type: Optional source type filter.
+            source_name: Optional source name filter.
+            include_deleted: If True, include soft-deleted objects.
+
+        Returns:
+            List of KnowledgeObjects, ordered by created_at DESC.
+        """
+        self._check_circuit()
+
+        if limit <= 0:
+            return []
+
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if not include_deleted:
+            clauses.append("deleted_at IS NULL")
+
+        if cursor is not None:
+            clauses.append("created_at < ?")
+            params.append(cursor)
+
+        if source_type is not None:
+            clauses.append("source_type = ?")
+            params.append(source_type)
+
+        if source_name is not None:
+            clauses.append("source_name = ?")
+            params.append(source_name)
+
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        sql = f"""
+            SELECT {_SELECT_COLUMNS}
+            FROM knowledge_objects
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            rows = conn.execute(sql, params).fetchall()
+
+            return [self._row_to_knowledge_object(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Statistics
+    # ------------------------------------------------------------------
+
+    def get_statistics(self) -> dict[str, Any]:
+        """Get aggregate statistics about the knowledge repository.
+
+        Returns:
+            Dict with total_items, by_source, by_date_range.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            # Total items
+            total = conn.execute(
+                "SELECT COUNT(*) FROM knowledge_objects WHERE deleted_at IS NULL"
+            ).fetchone()[0]
+
+            # By source
+            source_rows = conn.execute(
+                """
+                SELECT source_type, source_name, COUNT(*) as cnt
+                FROM knowledge_objects
+                WHERE deleted_at IS NULL
+                GROUP BY source_type, source_name
+                ORDER BY cnt DESC
+                """
+            ).fetchall()
+
+            by_source = {f"{row[0]}/{row[1]}": row[2] for row in source_rows}
+
+            # By date range (last 30 days, grouped by day)
+            date_rows = conn.execute(
+                """
+                SELECT DATE(published_at) as day, COUNT(*) as cnt
+                FROM knowledge_objects
+                WHERE deleted_at IS NULL
+                  AND published_at IS NOT NULL
+                  AND published_at >= DATE('now', '-30 days')
+                GROUP BY DATE(published_at)
+                ORDER BY day DESC
+                """
+            ).fetchall()
+
+            by_date = {row[0]: row[1] for row in date_rows}
+
+            # Last updated
+            last_row = conn.execute(
+                """
+                SELECT MAX(updated_at)
+                FROM knowledge_objects
+                WHERE deleted_at IS NULL
+                """
+            ).fetchone()
+
+            last_updated = last_row[0] if last_row and last_row[0] else None
+
+            return {
+                "total_items": total,
+                "by_source": by_source,
+                "by_date_range": by_date,
+                "last_updated": last_updated,
+            }
+
+    def get_source_health(self) -> list[dict[str, Any]]:
+        """Get health status per source.
+
+        Returns:
+            List of dicts with source info and item counts.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+
+            rows = conn.execute(
+                """
+                SELECT
+                    source_type,
+                    source_name,
+                    COUNT(*) as total_items,
+                    MAX(published_at) as last_published_at,
+                    MAX(created_at) as last_created_at
+                FROM knowledge_objects
+                WHERE deleted_at IS NULL
+                GROUP BY source_type, source_name
+                ORDER BY source_type, source_name
+                """
+            ).fetchall()
+
+            results = []
+            for row in rows:
+                results.append(
+                    {
+                        "source_type": row[0],
+                        "source_name": row[1],
+                        "total_items": row[2],
+                        "last_published_at": row[3],
+                        "last_created_at": row[4],
+                    }
+                )
+
+            return results
+
+    # ------------------------------------------------------------------
     # Delete Operations
     # ------------------------------------------------------------------
 
