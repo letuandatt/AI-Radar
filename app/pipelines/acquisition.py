@@ -57,6 +57,8 @@ class DefaultAcquisitionPipeline:
         self._github_registry = github_registry
         self._hf_registry = hf_registry
 
+        self._app_service = None
+
         # Initialize fetchers and parsers once for efficiency
         self._rss_fetcher = RSSFetcher()
         self._rss_parser = RSSParser()
@@ -185,9 +187,58 @@ class DefaultAcquisitionPipeline:
             result.execution_time,
         )
 
+        # self._save_objects_to_repository(knowledge_objects)
+
         try:
             save_acquisition_result(result)
         except Exception as e:
             logger.error("Failed to save acquisition result: %s", e)
 
         return result
+
+    def set_app_service(self, app_service) -> None:
+        """Inject ApplicationService for repository writes.
+
+        Called by ComponentRegistry after app_service is initialized.
+        If not set, pipeline falls back to JSON storage.
+
+        Args:
+            app_service: ApplicationService instance.
+        """
+        self._app_service = app_service
+        logger.info("ApplicationService injected into DefaultAcquisitionPipeline")
+
+    def _save_objects_to_repository(self, objects: list) -> None:
+        """Save KnowledgeObjects to repository via ApplicationService.
+
+        Falls back to JSON if app_service is not available.
+
+        Args:
+            objects: List of KnowledgeObjects (or RawArticles converted to KO).
+        """
+        if self._app_service is None:
+            logger.debug("ApplicationService not available, skipping repository save")
+            return
+
+        try:
+            result = self._app_service.save_objects(objects)
+            logger.info(
+                "Saved %d objects to repository: "
+                "sqlite=%d (C=%d U=%d S=%d), "
+                "vector=%d/%d, bm25=%d/%d",
+                result.sqlite_total,
+                result.sqlite_total,
+                result.sqlite_created,
+                result.sqlite_updated,
+                result.sqlite_skipped,
+                result.qdrant_synced,
+                result.qdrant_total,
+                result.bm25_synced,
+                result.bm25_total,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to save objects to repository: %s",
+                e,
+                exc_info=True,
+            )
