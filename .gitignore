@@ -4,7 +4,8 @@
 data/
 docs/private-docs/
 dev/
-working
+working/
+qdrant_storage/
 
 __pycache__/
 *.py[cod]
