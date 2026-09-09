@@ -21,6 +21,7 @@ from app.storage.knowledge.base import (
     SQLiteConnectionManager,
     retry_on_transient_error,
 )
+from app.storage.knowledge.indexes import MetadataIndexManager
 from app.storage.knowledge.knowledge_store import SaveResult
 from app.storage.knowledge.schema import ALL_DDL_STATEMENTS
 
@@ -82,6 +83,7 @@ class SQLiteKnowledgeStore:
         self._conn_manager = SQLiteConnectionManager(db_path, timeout=timeout)
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
         self._op_lock = threading.RLock()
+        self._index_manager = MetadataIndexManager()
         self._init_schema()
 
     # ------------------------------------------------------------------
@@ -95,6 +97,9 @@ class SQLiteKnowledgeStore:
             try:
                 for ddl in ALL_DDL_STATEMENTS:
                     conn.execute(ddl)
+
+                # Ensure metadata indexes exist
+                self._index_manager.ensure_indexes(conn)
 
                 try:
                     conn.execute(
@@ -261,10 +266,181 @@ class SQLiteKnowledgeStore:
             ).fetchone()
             return int(row[0])
 
+    @property
+    def conn_manager(self):
+        """Return the ConnectionManager instance."""
+        return self._conn_manager
+
     def close(self) -> None:
         """Close the underlying database connection."""
         with self._op_lock:
             self._conn_manager.close()
+
+    # ------------------------------------------------------------------
+    # Metadata Index Operations
+    # ------------------------------------------------------------------
+
+    def ensure_metadata_indexes(self) -> int:
+        """Ensure all metadata indexes exist.
+
+        Returns:
+            Number of indexes created.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            return self._index_manager.ensure_indexes(conn)
+
+    def optimize_metadata_indexes(self) -> None:
+        """Run ANALYZE to refresh SQLite query planner statistics."""
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            self._index_manager.analyze(conn)
+
+    def list_metadata_indexes(self) -> list[str]:
+        """List existing metadata indexes on knowledge_objects table.
+
+        Returns:
+            Sorted list of index names.
+        """
+        self._check_circuit()
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            return self._index_manager.list_existing_indexes(conn)
+
+    # ------------------------------------------------------------------
+    # Metadata Query Operations
+    # ------------------------------------------------------------------
+
+    def query_by_metadata(
+        self,
+        source_type: str | None = None,
+        source_name: str | None = None,
+        published_after: datetime | None = None,
+        published_before: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+    ) -> list[KnowledgeObject]:
+        """Query KnowledgeObjects using indexed metadata filters.
+
+        Args:
+            source_type: Filter by source_type.
+            source_name: Filter by source_name.
+            published_after: Inclusive lower bound for published_at.
+            published_before: Inclusive upper bound for published_at.
+            limit: Maximum number of objects to return.
+            offset: Pagination offset.
+            include_deleted: If True, include soft-deleted objects.
+
+        Returns:
+            List of matching KnowledgeObjects, ordered by published_at DESC.
+        """
+        self._check_circuit()
+
+        if limit <= 0:
+            return []
+
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if not include_deleted:
+            clauses.append("deleted_at IS NULL")
+
+        if source_type is not None:
+            clauses.append("source_type = ?")
+            params.append(source_type)
+
+        if source_name is not None:
+            clauses.append("source_name = ?")
+            params.append(source_name)
+
+        if published_after is not None:
+            clauses.append("published_at >= ?")
+            params.append(self._to_iso(published_after))
+
+        if published_before is not None:
+            clauses.append("published_at <= ?")
+            params.append(self._to_iso(published_before))
+
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        sql = f"""
+            SELECT {_SELECT_COLUMNS}
+            FROM knowledge_objects
+            {where_clause}
+            ORDER BY published_at DESC, created_at DESC
+            LIMIT ? OFFSET ?
+        """
+
+        params.extend([limit, offset])
+
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            rows = conn.execute(sql, params).fetchall()
+
+            return [self._row_to_knowledge_object(row) for row in rows]
+
+    def query_by_source(
+        self,
+        source_type: str,
+        source_name: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+    ) -> list[KnowledgeObject]:
+        """Query KnowledgeObjects by source.
+
+        Args:
+            source_type: Source type filter.
+            source_name: Optional source name filter.
+            limit: Maximum number of objects to return.
+            offset: Pagination offset.
+            include_deleted: If True, include soft-deleted objects.
+
+        Returns:
+            List of matching KnowledgeObjects.
+        """
+        return self.query_by_metadata(
+            source_type=source_type,
+            source_name=source_name,
+            limit=limit,
+            offset=offset,
+            include_deleted=include_deleted,
+        )
+
+    def query_recent(
+        self,
+        limit: int = 100,
+        source_type: str | None = None,
+        source_name: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[KnowledgeObject]:
+        """Query recent KnowledgeObjects ordered by published_at DESC.
+
+        Args:
+            limit: Maximum number of objects to return.
+            source_type: Optional source type filter.
+            source_name: Optional source name filter.
+            include_deleted: If True, include soft-deleted objects.
+
+        Returns:
+            List of recent KnowledgeObjects.
+        """
+        return self.query_by_metadata(
+            source_type=source_type,
+            source_name=source_name,
+            limit=limit,
+            offset=0,
+            include_deleted=include_deleted,
+        )
 
     # ------------------------------------------------------------------
     # Delete Operations
