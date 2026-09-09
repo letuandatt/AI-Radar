@@ -20,6 +20,7 @@ from ..fetchers.registry import (
 from ..pipelines.acquisition import DefaultAcquisitionPipeline
 from ..services.repository import (
     create_application_services,
+    create_retrieval_service,
     initialize_knowledge_repository,
 )
 from ..storage.base import get_storage, initialize_storage, shutdown_storage
@@ -81,6 +82,27 @@ def _shutdown_repository(initializer) -> None:
     initializer.shutdown()
 
 
+def _init_retrieval():
+    """Initialize the Retrieval Service (S18).
+
+    Creates MetadataFilterEngine, VectorSearchService, FusionRetriever,
+    and RetrievalService from repository components.
+    Uses factory from bootstrap layer to avoid database-specific imports.
+
+    Returns:
+        Fully wired RetrievalService instance.
+    """
+    assert _registry is not None, "ComponentRegistry must be initialized"
+    initializer = _registry.get_component("repository")
+
+    return create_retrieval_service(initializer)
+
+
+def _shutdown_retrieval(retrieval_service) -> None:
+    """Shutdown the Retrieval Service (no-op, stateless)."""
+    logger.debug("Retrieval service shutdown (no-op)")
+
+
 def _init_app_service():
     """Initialize ApplicationService facade.
 
@@ -89,6 +111,11 @@ def _init_app_service():
     """
     assert _registry is not None, "ComponentRegistry must be initialized"
     initializer = _registry.get_component("repository")
+
+    app_service = create_application_services(initializer)
+
+    retrieval_service = _registry.get_component("retrieval")
+    app_service.set_retrieval_service(retrieval_service)
 
     return create_application_services(initializer)
 
@@ -197,6 +224,12 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
             priority=15,
         )
         _registry.register("scheduler", _init_scheduler, _shutdown_scheduler, priority=20)
+        _registry.register(
+            "retrieval",
+            _init_retrieval,
+            _shutdown_retrieval,
+            priority=25,
+        )
         _registry.register("storage", _init_storage, _shutdown_storage, priority=30)
         _registry.register(
             "app_service",
