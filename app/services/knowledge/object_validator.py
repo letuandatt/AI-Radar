@@ -223,18 +223,6 @@ class KnowledgeObjectValidator:
         """Verify metadata consistency rules."""
         metadata = ko.metadata
 
-        # Summary must not exceed content length
-        if len(metadata.summary) > len(ko.content_text):
-            return ValidationResult.failure(
-                error_message="metadata.summary is longer than content_text",
-                details={
-                    "field": "metadata.summary",
-                    "object_id": ko.id,
-                    "summary_length": len(metadata.summary),
-                    "content_length": len(ko.content_text),
-                },
-            )
-
         # Relevance score must be within valid range
         if not 0.0 <= metadata.relevance_score <= 1.0:
             return ValidationResult.failure(

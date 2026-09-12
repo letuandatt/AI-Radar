@@ -38,6 +38,7 @@ def mock_assembler() -> MagicMock:
         invalid_count=0,
         created_count=1,
         updated_count=0,
+        skipped_count=0,
     )
     return assembler
 

@@ -78,9 +78,11 @@ class TestBasicOperations:
 
     def test_save_and_retrieve(self, store: FileKnowledgeStore) -> None:
         obj = _make_knowledge_object()
-        created = store.save_objects([obj])
+        result = store.save_objects([obj])
 
-        assert created == 1
+        assert result.created == 1  # ← Đổi từ assert created == 1
+        assert result.updated == 0
+        assert result.skipped == 0
         assert store.count() == 1
 
         retrieved = store.get_by_external_id("ext_001", "rss")
@@ -110,66 +112,80 @@ class TestBasicOperations:
 
 
 class TestIdempotency:
-    """Tests for idempotent save behavior (create vs update)."""
+    """Tests for idempotent save behavior (DATA-001)."""
 
     def test_first_save_creates_all(self, store: FileKnowledgeStore) -> None:
-        """First call: all objects are new → all created."""
         obj_a = _make_knowledge_object(external_id="a", content="Content A")
         obj_b = _make_knowledge_object(external_id="b", content="Content B")
         obj_c = _make_knowledge_object(external_id="c", content="Content C")
 
-        created = store.save_objects([obj_a, obj_b, obj_c])
-
-        assert created == 3
+        result = store.save_objects([obj_a, obj_b, obj_c])
+        assert result.created == 3
+        assert result.updated == 0
+        assert result.skipped == 0
         assert store.count() == 3
 
     def test_second_save_same_objects_creates_none(self, store: FileKnowledgeStore) -> None:
-        """Second call with same objects: all are updates → 0 created."""
         obj_a = _make_knowledge_object(external_id="a", content="Content A")
         obj_b = _make_knowledge_object(external_id="b", content="Content B")
         obj_c = _make_knowledge_object(external_id="c", content="Content C")
 
         store.save_objects([obj_a, obj_b, obj_c])
-        created = store.save_objects([obj_a, obj_b, obj_c])
+        result = store.save_objects([obj_a, obj_b, obj_c])
 
-        assert created == 0
+        assert result.created == 0
+        assert result.updated == 0
+        assert result.skipped == 3
         assert store.count() == 3
 
     def test_third_save_mixed_creates_only_new(self, store: FileKnowledgeStore) -> None:
-        """Third call: 1 new + 2 existing → 1 created, 2 updated."""
+        """Mixed batch: 1 new, 1 unchanged, 1 changed content."""
         obj_a = _make_knowledge_object(external_id="a", content="Content A")
         obj_b = _make_knowledge_object(external_id="b", content="Content B")
-
         store.save_objects([obj_a, obj_b])
 
-        # Modify A's title, keep B same, add new D
+        # a: changed content -> UPDATE
         obj_a_modified = _make_knowledge_object(
-            external_id="a", content="Content A", title="Updated Title A"
+            external_id="a",
+            content="Content A updated",
+            title="Updated Title A",
         )
+
+        # b: unchanged -> SKIP
+        obj_b_same = _make_knowledge_object(external_id="b", content="Content B")
+
+        # d: new -> CREATE
         obj_d = _make_knowledge_object(external_id="d", content="Content D")
 
-        created = store.save_objects([obj_a_modified, obj_b, obj_d])
+        result = store.save_objects([obj_a_modified, obj_b_same, obj_d])
 
-        assert created == 1  # Only D is new
-        assert store.count() == 3  # A, B, D (A was updated, not duplicated)
+        assert result.created == 1
+        assert result.updated == 1
+        assert result.skipped == 1
+        assert store.count() == 3
 
-        # Verify A was actually updated
         retrieved_a = store.get_by_external_id("a", "rss")
         assert retrieved_a is not None
         assert retrieved_a.title == "Updated Title A"
 
-    def test_duplicate_content_hash_detected(self, store: FileKnowledgeStore) -> None:
-        """Same content with different external_id → detected as duplicate."""
+    def test_same_content_different_external_id_creates_separate_objects(
+        self, store: FileKnowledgeStore
+    ) -> None:
+        """Same content but different external_id -> separate KnowledgeObjects."""
         obj_1 = _make_knowledge_object(external_id="id_1", content="Same content")
         store.save_objects([obj_1])
 
-        # Different external_id but same content
         obj_2 = _make_knowledge_object(external_id="id_2", content="Same content")
-        created = store.save_objects([obj_2])
+        result = store.save_objects([obj_2])
 
-        # Should be treated as update (content_hash match), not create
-        assert created == 0
-        assert store.count() == 1
+        assert result.created == 1
+        assert result.updated == 0
+        assert result.skipped == 0
+        assert store.count() == 2
+
+        # content_hash lookup vẫn hoạt động
+        found = store.get_by_content_hash(compute_text_hash("Same content"))
+        assert found is not None
 
 
 # ==============================================================================
