@@ -23,8 +23,8 @@ logger = get_logger(__name__)
 # OLLAMA MODEL PARAMETERS — Edit here to adjust behavior
 # ============================================================================
 
-OLLAMA_MODEL = "qwen3:1.7b"  # Đổi sang "qwen3:1.7b" nếu muốn nhanh hơn
-OLLAMA_TEMPERATURE = 0.1  # Thấp = deterministic, tốt cho extraction
+OLLAMA_MODEL = "qwen3:4b"
+OLLAMA_TEMPERATURE = 0.1
 OLLAMA_NUM_PREDICT = 1024  # Max output tokens (summary + topics + entities + score)
 OLLAMA_BASE_URL = "http://localhost:11434"
 
@@ -38,7 +38,7 @@ def create_ollama_chat_model(
     """Create a configured ChatOllama instance for local extraction.
 
     Args:
-        model: Ollama model name (vd: qwen3:1.7b).
+        model: Ollama model name (vd: qwen3:4b).
         base_url: Ollama server URL. Local = http://localhost:11434,
                   Docker = http://ollama:11434.
 
