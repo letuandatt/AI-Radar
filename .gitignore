@@ -8,6 +8,7 @@ working/
 qdrant_storage/
 
 app/storage/knowledge/knowledge.db
+app/storage/search/bm25_index.pkl
 
 __pycache__/
 *.py[cod]
