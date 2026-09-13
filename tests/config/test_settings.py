@@ -6,7 +6,6 @@ from app.config.settings import Settings
 
 def test_configuration_loads_environment_values(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "**********")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
     monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
     monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
@@ -29,7 +28,6 @@ def test_configuration_loads_environment_values(monkeypatch):
 
 def test_loaded_configuration_can_be_used_by_application_component(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "**********")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
     monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
     monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
@@ -45,7 +43,6 @@ def test_loaded_configuration_can_be_used_by_application_component(monkeypatch):
 
 def test_configuration_missing_required_value_is_rejected(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
     monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
     monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
@@ -60,7 +57,6 @@ def test_configuration_missing_required_value_is_rejected(monkeypatch):
 
 def test_configuration_invalid_value_is_rejected(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
     monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
     monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
@@ -73,7 +69,6 @@ def test_configuration_invalid_value_is_rejected(monkeypatch):
         Settings.model_validate(
             {
                 "groq_api_key": 123,
-                "gemini_api_key": "test-gemini-key",
                 "cohere_api_key": "test-cohere-key",
                 "qdrant_url": "https://qdrant.example.com",
                 "qdrant_api_key": "test-qdrant-key",
