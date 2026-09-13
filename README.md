@@ -9,7 +9,7 @@
 
 <div style="margin-top: 20px;">
 
-![Status](https://img.shields.io/badge/Status-Documentation%20Phase-orange)
+![Status](https://img.shields.io/badge/Status-Development%20Phase-orange)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Architecture](https://img.shields.io/badge/Architecture-Modular%20Monolith-lightgrey)
@@ -118,12 +118,12 @@ The project documentation is organized into dedicated document sets.
 
 | Category        | Technology              |
 | --------------- |-------------------------|
-| Language        | Python 3.10+            |
+| Language        | Python 3.12             |
 | AI Framework    | LangChain               |
-| LLM Provider    | Groq API                |
+| LLM Provider    | Groq API - Ollama       |
 | Embedding       | Cohere Embeddings       |
 | Vector Database | Qdrant                  |
-| Scheduler       | APScheduler             |
+| Scheduler       | Self-implement          |
 | Notification    | Zalo Official Account   |
 | Deployment      | Docker & Docker Compose |
 
