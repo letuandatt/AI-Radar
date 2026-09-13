@@ -13,7 +13,6 @@ class Settings(BaseSettings):
 
     groq_api_key: SecretStr
     cohere_api_key: str
-    openrouter_api_key: str
 
     qdrant_url: str
     qdrant_api_key: str
@@ -23,7 +22,7 @@ class Settings(BaseSettings):
     zalo_access_token: str
     zalo_webhook_secret: str
 
-    llm_provider: str = Field(default="gemini", description="LLM provider to use.")
+    llm_provider: str = Field(default="ollama", description="LLM provider to use.")
 
     rss_sources: list[dict[str, str]] = Field(
         default_factory=list,
