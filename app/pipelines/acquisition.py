@@ -187,8 +187,6 @@ class DefaultAcquisitionPipeline:
             result.execution_time,
         )
 
-        # self._save_objects_to_repository(knowledge_objects)
-
         try:
             save_acquisition_result(result)
         except Exception as e:
