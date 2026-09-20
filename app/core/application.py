@@ -117,7 +117,7 @@ def _init_app_service():
     retrieval_service = _registry.get_component("retrieval")
     app_service.set_retrieval_service(retrieval_service)
 
-    return create_application_services(initializer)
+    return app_service
 
 
 def _shutdown_app_service(app_service) -> None:
