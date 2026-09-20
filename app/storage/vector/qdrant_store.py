@@ -79,7 +79,7 @@ class QdrantVectorStore:
             failure_threshold=QDRANT_CIRCUIT_FAILURE_THRESHOLD,
             recovery_timeout=QDRANT_CIRCUIT_RECOVERY_TIMEOUT,
         )
-        self._client = QdrantClient(url=url, timeout=timeout)
+        self._client = QdrantClient(url=url, timeout=timeout, check_compatibility=False)
         self._index_config = index_config or VectorIndexConfig()
 
     # ------------------------------------------------------------------
