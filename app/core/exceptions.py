@@ -21,6 +21,12 @@ class DuplicateJobError(ApplicationError):
     """Raised when a job is registered more than once."""
 
 
+class BudgetExceededError(ApplicationError):
+    """Raised when daily LLM budget is exceeded."""
+
+    pass
+
+
 def report_application_error(
     error: Exception,
     *,
