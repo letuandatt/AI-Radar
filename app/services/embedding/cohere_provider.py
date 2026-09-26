@@ -6,8 +6,9 @@ Model: embed-multilingual-v3.0 (1024 dimensions).
 
 import cohere
 
+from app.core.circuit_breaker import CircuitBreaker
 from app.core.logger import get_logger
-from app.storage.knowledge.base import CircuitBreaker, retry_on_transient_error
+from app.core.retry import retry_on_transient_error
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ class CohereEmbeddingProvider:
     @retry_on_transient_error(
         max_retries=3,
         base_delay=0.5,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def embed_text(self, text: str) -> list[float]:
         """Embed a single text using Cohere.
@@ -80,7 +81,7 @@ class CohereEmbeddingProvider:
     @retry_on_transient_error(
         max_retries=3,
         base_delay=0.5,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts using Cohere.

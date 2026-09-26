@@ -6,8 +6,9 @@ Model: nomic-embed-text-v2-moe (768 dimensions).
 
 import ollama
 
+from app.core.circuit_breaker import CircuitBreaker
 from app.core.logger import get_logger
-from app.storage.knowledge.base import CircuitBreaker, retry_on_transient_error
+from app.core.retry import retry_on_transient_error
 
 logger = get_logger(__name__)
 
@@ -50,7 +51,7 @@ class OllamaEmbeddingProvider:
     @retry_on_transient_error(
         max_retries=3,
         base_delay=0.5,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def embed_text(self, text: str) -> list[float]:
         """Embed a single text using Ollama.
@@ -82,7 +83,7 @@ class OllamaEmbeddingProvider:
     @retry_on_transient_error(
         max_retries=3,
         base_delay=0.5,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts using Ollama.
