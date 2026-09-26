@@ -12,15 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from app.core.logger import get_logger
+from app.core.retry import retry_on_transient_error
 from app.models.knowledge_object import KnowledgeObject
 from app.models.metadata import ExtractionResult
-from app.storage.knowledge.base import (
-    CircuitBreaker,
-    CircuitBreakerOpenError,
-    SQLiteConnectionManager,
-    retry_on_transient_error,
-)
+from app.storage.knowledge.base import SQLiteConnectionManager
 from app.storage.knowledge.indexes import MetadataIndexManager
 from app.storage.knowledge.knowledge_store import SaveResult
 from app.storage.knowledge.schema import ALL_DDL_STATEMENTS
@@ -1001,14 +998,92 @@ class SQLiteKnowledgeStore:
 
         return UpdateResult(updated=updated, skipped=skipped)
 
+    #
+    # Analyze Content
+    #
+    def query_unanalyzed(self, limit: int = 50) -> list[KnowledgeObject]:
+        """Query KnowledgeObjects that do not have a content analysis yet.
+
+        Args:
+            limit: Maximum number of items to return.
+
+        Returns:
+            List of KnowledgeObjects without content analysis,
+            ordered by created_at descending.
+        """
+        self._circuit_breaker.ensure_closed()
+
+        with self._conn_manager.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT *
+                FROM knowledge_objects
+                WHERE id NOT IN (SELECT knowledge_id FROM content_analyses)
+                  AND deleted_at IS NULL
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+
+        return [self._row_to_knowledge_object(row) for row in rows]
+
+    def save_analysis(
+        self,
+        analysis_id: str,
+        knowledge_id: str,
+        analyzed_at: str,
+        themes_json: str,
+        entities_json: str,
+        sentiment: str,
+        key_claims_json: str,
+        technical_depth: str,
+        confidence: float,
+    ) -> None:
+        """Save a content analysis result.
+
+        Args:
+            analysis_id: Unique identifier for the analysis.
+            knowledge_id: ID of the analyzed KnowledgeObject.
+            analyzed_at: ISO timestamp of analysis.
+            themes_json: JSON-serialized themes list.
+            entities_json: JSON-serialized entities dict.
+            sentiment: Sentiment value.
+            key_claims_json: JSON-serialized key claims list.
+            technical_depth: Technical depth value.
+            confidence: Confidence score.
+        """
+        self._circuit_breaker.ensure_closed()
+
+        with self._conn_manager.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO content_analyses (analysis_id, knowledge_id, analyzed_at,
+                                              themes_json, entities_json, sentiment,
+                                              key_claims_json, technical_depth, confidence,
+                                              created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    analysis_id,
+                    knowledge_id,
+                    analyzed_at,
+                    themes_json,
+                    entities_json,
+                    sentiment,
+                    key_claims_json,
+                    technical_depth,
+                    confidence,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
     # ------------------------------------------------------------------
     # Save internals
     # ------------------------------------------------------------------
 
     @retry_on_transient_error(
-        max_retries=3,
-        base_delay=0.5,
-        retryable_exceptions=(sqlite3.OperationalError,),
+        exceptions=(sqlite3.OperationalError,),
     )
     def _save_objects_with_retry(self, objects: list[KnowledgeObject]) -> SaveResult:
         """Retry wrapper around the atomic save operation."""
