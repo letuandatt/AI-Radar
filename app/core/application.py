@@ -23,6 +23,7 @@ from ..services.repository import (
     create_retrieval_service,
     initialize_knowledge_repository,
 )
+from ..services.repository.bootstrap import create_analysis_service
 from ..storage.base import get_storage, initialize_storage, shutdown_storage
 from .lifecycle import ApplicationLifecycle
 
@@ -206,6 +207,17 @@ def _shutdown_acquisition(pipeline: DefaultAcquisitionPipeline) -> None:
     logger.debug("Acquisition pipeline shutdown (no-op)")
 
 
+def _init_analysis():
+    """Initialize Content Analysis Service."""
+    initializer = _registry.get_component("repository")
+    return create_analysis_service(initializer)
+
+
+def _shutdown_analysis(analysis_service) -> None:
+    """Shutdown Content Analysis Service (no-op, stateless)."""
+    logger.debug("Content analysis service shutdown (no-op)")
+
+
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
     global _registry
@@ -237,6 +249,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
             _shutdown_app_service,
             priority=35,
         )
+        _registry.register("analysis", _init_analysis, _shutdown_analysis, priority=37)
         _registry.register("acquisition", _init_acquisition, _shutdown_acquisition, priority=40)
 
         # Start all components
