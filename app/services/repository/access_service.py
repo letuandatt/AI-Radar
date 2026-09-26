@@ -7,7 +7,7 @@ This is the "Application Service" that MCP adapter and Web Dashboard
 will call into, avoiding direct storage access.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.logger import get_logger
 from app.models.knowledge_object import KnowledgeObject
@@ -23,6 +23,9 @@ from app.services.repository.query_models import (
     SourceHealth,
 )
 from app.storage.knowledge.sqlite_store import SQLiteKnowledgeStore
+
+if TYPE_CHECKING:
+    from app.services.analysis.models import ContentAnalysisResult
 
 logger = get_logger(__name__)
 
@@ -265,6 +268,44 @@ class RepositoryAccessService:
                 has_prev=has_prev,
                 total=total,
             ),
+        )
+
+    # ------------------------------------------------------------------
+    # Content Analysis Management
+    # ------------------------------------------------------------------
+
+    def list_unanalyzed_items(self, limit: int = 50) -> list[KnowledgeObject]:
+        """List KnowledgeObjects that do not have a content analysis yet.
+
+        Args:
+            limit: Maximum number of items to return.
+
+        Returns:
+            List of unanalyzed KnowledgeObjects.
+        """
+        return self._store.query_unanalyzed(limit)
+
+    def save_content_analysis(self, result: "ContentAnalysisResult") -> None:
+        """Save a content analysis result.
+
+        Args:
+            result: The analysis result to persist.
+        """
+        import json
+        import uuid
+
+        analysis_id = str(uuid.uuid4())
+
+        self._store.save_analysis(
+            analysis_id=analysis_id,
+            knowledge_id=result.knowledge_id,
+            analyzed_at=result.analyzed_at.isoformat(),
+            themes_json=json.dumps(result.themes),
+            entities_json=json.dumps(result.entities.model_dump()),
+            sentiment=result.sentiment,
+            key_claims_json=json.dumps(result.key_claims),
+            technical_depth=result.technical_depth,
+            confidence=result.confidence,
         )
 
     # ------------------------------------------------------------------

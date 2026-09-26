@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.config.settings import Settings
 from app.core.logger import get_logger
+from app.services.analysis.content_analyzer import ContentAnalyzer
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
 
@@ -121,4 +122,33 @@ def create_retrieval_service(initializer: "RepositoryInitializer"):
         bm25_index=initializer.bm25_index,
         sqlite_store=initializer.sqlite_store,
         filter_engine=filter_engine,
+    )
+
+
+def create_analysis_service(initializer: RepositoryInitializer) -> ContentAnalyzer:
+    """Create ContentAnalyzer service from repository initializer.
+
+    Args:
+        initializer: Initialized repository with all stores ready.
+
+    Returns:
+        Configured ContentAnalyzer instance.
+    """
+    from app.integrations.llm.factory import LLMProviderFactory
+    from app.prompts.loader import PromptLoader
+    from app.services.repository.access_service import RepositoryAccessService
+
+    access_service = RepositoryAccessService(initializer.sqlite_store)
+
+    llm_chain = LLMProviderFactory.create(
+        primary_provider="ollama",
+        fallback_providers=None,  # No fallback for analysis
+    )
+
+    prompt_loader = PromptLoader()
+
+    return ContentAnalyzer(
+        access_service=access_service,
+        llm_provider=llm_chain,
+        prompt_loader=prompt_loader,
     )
