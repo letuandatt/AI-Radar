@@ -20,8 +20,8 @@ from app.services.repository.access_service import RepositoryAccessService
 
 logger = get_logger(__name__)
 
-# Prompt template name (matches prompts/analysis/content_analysis.md)
-_PROMPT_NAME = "analysis/content_analysis"
+# Prompt template name (matches prompts/analytics/content_analysis.md)
+_PROMPT_NAME = "analytics/content_analysis"
 
 
 class ContentAnalyzer:
