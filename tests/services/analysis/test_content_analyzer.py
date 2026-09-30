@@ -5,12 +5,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.models.knowledge_object import KnowledgeObject
+from app.prompts.loader import PromptLoader
 from app.services.analysis.content_analyzer import ContentAnalyzer
 from app.services.analysis.models import (
     AnalysisEntities,
     ContentAnalysisOutput,
     ContentAnalysisResult,
 )
+from app.services.repository.query_models import KnowledgeDetailResponse
 
 
 @pytest.fixture
@@ -72,6 +74,36 @@ def sample_knowledge_object():
             "relevance_score": 0.85,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_analyze_works_with_real_detail_response():
+    """analyze() phải hoạt động với KnowledgeDetailResponse THẬT (không mock loader)."""
+    analyzer = ContentAnalyzer(
+        access_service=MagicMock(),
+        llm_provider=MagicMock(),
+        prompt_loader=PromptLoader(),
+    )
+    item = KnowledgeDetailResponse(
+        id="abc-123",
+        title="Test article",
+        source_type="rss",
+        source_name="blog",
+        content_text="Some AI news content",
+        content_hash="hash",
+    )
+    analyzer._access_service.get_knowledge_item.return_value = item
+    analyzer._llm_provider.structured_chat.return_value = ContentAnalysisOutput(
+        themes=["t"],
+        entities={},
+        sentiment="neutral",
+        key_claims=["c"],
+        technical_depth="beginner",
+        confidence=0.9,
+    )
+
+    result = await analyzer.analyze("abc-123")
+    assert result.knowledge_id == "abc-123"
 
 
 class TestAnalyze:
