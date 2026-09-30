@@ -66,7 +66,7 @@ class OllamaProvider:
                     provider="ollama",
                     model=self._model_name,
                     prompt=prompt,
-                    response=response.content,  # type: ignore[arg-type]
+                    response=self._content_to_str(response.content),
                     tokens_in=0,
                     tokens_out=0,
                     latency_ms=latency_ms,
@@ -75,7 +75,7 @@ class OllamaProvider:
                 )
 
             self._circuit_breaker.record_success()
-            return response.content  # type: ignore[return-value]
+            return self._content_to_str(response.content)
 
         except Exception as e:
             self._circuit_breaker.record_failure()
@@ -108,12 +108,16 @@ class OllamaProvider:
             if self._cost_tracker:
                 self._cost_tracker.track("ollama", self._model_name, 0, 0, 0.0)
 
+            response_text = (
+                response.model_dump_json() if isinstance(response, BaseModel) else str(response)
+            )
+
             if self._logger:
                 self._logger.log(
                     provider="ollama",
                     model=self._model_name,
                     prompt=prompt,
-                    response=str(response.model_dump()),  # type: ignore[union-attr]
+                    response=response_text,
                     tokens_in=0,
                     tokens_out=0,
                     latency_ms=latency_ms,
@@ -147,3 +151,20 @@ class OllamaProvider:
 
     def get_provider_name(self) -> str:
         return "ollama"
+
+    # ---------------------------------------
+    # Private Methods
+    # ---------------------------------------
+
+    @staticmethod
+    def _content_to_str(content: object) -> str:
+        """Normalize LangChain content (str | list[parts]) to plain string."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                block if isinstance(block, str) else str(block.get("text", block))
+                for block in content
+            ]
+            return "\n".join(parts)
+        return str(content)

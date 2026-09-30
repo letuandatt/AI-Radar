@@ -70,8 +70,9 @@ class GroqProvider:
             response = self._llm.invoke(prompt)
             latency_ms = (time.time() - start_time) * 1000
 
-            tokens_in = getattr(response, "usage_metadata", {}).get("input_tokens", 0)
-            tokens_out = getattr(response, "usage_metadata", {}).get("output_tokens", 0)
+            usage = getattr(response, "usage_metadata", None) or {}
+            tokens_in = usage.get("input_tokens", 0)
+            tokens_out = usage.get("output_tokens", 0)
             cost = self._calculate_cost(tokens_in, tokens_out)
 
             if self._cost_tracker:
@@ -82,7 +83,7 @@ class GroqProvider:
                     provider="groq",
                     model=self._model_name,
                     prompt=prompt,
-                    response=response.content,  # type: ignore[arg-type]
+                    response=self._content_to_str(response.content),
                     tokens_in=tokens_in,
                     tokens_out=tokens_out,
                     latency_ms=latency_ms,
@@ -91,7 +92,7 @@ class GroqProvider:
                 )
 
             self._circuit_breaker.record_success()
-            return response.content  # type: ignore[return-value]
+            return self._content_to_str(response.content)
 
         except Exception as e:
             self._circuit_breaker.record_failure()
@@ -128,12 +129,16 @@ class GroqProvider:
             if self._cost_tracker:
                 self._cost_tracker.track("groq", self._model_name, tokens_in, tokens_out, cost)
 
+            response_text = (
+                response.model_dump_json() if isinstance(response, BaseModel) else str(response)
+            )
+
             if self._logger:
                 self._logger.log(
                     provider="groq",
                     model=self._model_name,
                     prompt=prompt,
-                    response=str(response.model_dump()),  # type: ignore[union-attr]
+                    response=response_text,
                     tokens_in=tokens_in,
                     tokens_out=tokens_out,
                     latency_ms=latency_ms,
@@ -167,3 +172,20 @@ class GroqProvider:
 
     def get_provider_name(self) -> str:
         return "groq"
+
+    # ---------------------------------------
+    # Private Methods
+    # ---------------------------------------
+
+    @staticmethod
+    def _content_to_str(content: object) -> str:
+        """Normalize LangChain content (str | list[parts]) to plain string."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                block if isinstance(block, str) else str(block.get("text", block))
+                for block in content
+            ]
+            return "\n".join(parts)
+        return str(content)
