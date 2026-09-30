@@ -34,7 +34,6 @@ class TestCostTracker:
 
         # Simulate day change
         tomorrow = date.today() + timedelta(days=1)
-        tomorrow = tomorrow.replace(day=tomorrow.day + 1)
         monkeypatch.setattr(
             "app.core.cost_tracker.date",
             type("MockDate", (), {"today": staticmethod(lambda: tomorrow)}),
