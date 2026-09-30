@@ -9,7 +9,6 @@ from typing import cast
 
 from app.core.logger import get_logger
 from app.integrations.llm.provider import LLMProvider
-from app.models.knowledge_object import KnowledgeObject
 from app.prompts.builder import PromptBuilder
 from app.prompts.loader import PromptLoader
 from app.services.analysis.models import (
@@ -84,16 +83,14 @@ class ContentAnalyzer:
         if item is None:
             raise ValueError(f"KnowledgeObject not found: {knowledge_id}")
 
-        knowledge_object = item.knowledge_object  # type: ignore[attr-defined]
-
         # 2. Build prompt
-        prompt = self._build_prompt(knowledge_object)
+        prompt = self._build_prompt(item.content_text)
 
         # 3. Call LLM (in thread pool since structured_chat is synchronous)
         logger.info(
             "Analyzing KnowledgeObject %s (title: %s)",
             knowledge_id[:16],
-            knowledge_object.title[:50],
+            item.title[:50],
         )
 
         output = await asyncio.to_thread(
@@ -172,17 +169,17 @@ class ContentAnalyzer:
         async with self._semaphore:
             return await self.analyze(knowledge_id)
 
-    def _build_prompt(self, knowledge_object: KnowledgeObject) -> str:
-        """Build the analysis prompt for a KnowledgeObject.
+    def _build_prompt(self, content_text: str) -> str:
+        """Build the analysis prompt for a knowledge item.
 
         Args:
-            knowledge_object: The object to build a prompt for.
+            content_text: The content text to analyze.
 
         Returns:
             The rendered prompt string.
         """
         builder = PromptBuilder(self._prompt_template)
-        builder.with_untrusted_data(knowledge_object.content_text)
+        builder.with_untrusted_data(content_text)
         return builder.build()
 
     def _validate_output(self, output: ContentAnalysisOutput) -> None:
