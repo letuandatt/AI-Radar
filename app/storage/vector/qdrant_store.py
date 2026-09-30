@@ -622,7 +622,7 @@ class QdrantVectorStore:
         Returns:
             Number of points deleted.
         """
-        return self.delete_points(ids)  # type: ignore[no-any-return]
+        return self.delete_points(ids)
 
     def reindex_collection(self) -> int:
         """Delete all points from the collection (full clear).

@@ -148,7 +148,7 @@ class SQLiteKnowledgeStore:
             raise
 
         self._circuit_breaker.record_success()
-        return result  # type: ignore[no-any-return]
+        return result
 
     def get_by_id(self, obj_id: str, include_deleted: bool = False) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by internal ID.
