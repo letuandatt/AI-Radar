@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS knowledge_objects (
     title TEXT,
     content_text TEXT,
     metadata_json TEXT,
-    fetched_at TIMESTAMP,
+    fetched_at TIMESTAMP NOT NULL,
     published_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
