@@ -3,6 +3,7 @@
 from datetime import date
 
 import pytest
+from future.backports.datetime import timedelta
 
 from app.core.cost_tracker import CostTracker
 from app.core.exceptions import BudgetExceededError
@@ -32,7 +33,7 @@ class TestCostTracker:
         assert tracker.get_current_cost() == 5.0
 
         # Simulate day change
-        tomorrow = date.today()
+        tomorrow = date.today() + timedelta(days=1)
         tomorrow = tomorrow.replace(day=tomorrow.day + 1)
         monkeypatch.setattr(
             "app.core.cost_tracker.date",
