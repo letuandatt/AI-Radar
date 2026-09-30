@@ -1272,8 +1272,8 @@ class SQLiteKnowledgeStore:
             metadata=ExtractionResult.model_validate_json(row[8]),
             fetched_at=self._parse_dt(row[9]) or datetime.now(timezone.utc),
             published_at=self._parse_dt(row[10]),
-            created_at=self._parse_dt(row[11]),  # type: ignore[arg-type]
-            updated_at=self._parse_dt(row[12]),  # type: ignore[arg-type]
+            created_at=self._parse_dt(row[11]) or datetime.now(timezone.utc),
+            updated_at=self._parse_dt(row[12]) or datetime.now(timezone.utc),
             parser_version=row[13],
             normalizer_version=row[14],
             extractor_version=row[15],
