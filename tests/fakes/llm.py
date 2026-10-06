@@ -67,6 +67,10 @@ class FakeLLMProvider:
     def get_provider_name(self) -> str:
         return self._provider_name
 
+    def estimate_cost(self, prompt: str) -> float:
+        """Fakes are free — never budget-denied unless a script value says so."""
+        return 0.0
+
     def _next_response(self) -> Any:
         if self._script:
             return self._script.pop(0)

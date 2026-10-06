@@ -59,6 +59,8 @@ def test_factory_passes_budget_to_cost_tracker(mock_groq_create, mock_ollama_cre
         mock_cost_tracker_cls.assert_called_once_with(
             daily_budget_usd=5.5,
             alert_percent=0.9,
+            daily_token_limit=None,
+            daily_request_limit=None,
         )
 
 
@@ -98,6 +100,8 @@ def test_create_llm_chain_uses_settings(mock_get_settings, mock_factory_create):
     mock_settings.llm_alert_percent = 0.9
     mock_settings.llm_rate_limit_rpm = 120.0
     mock_settings.llm_rate_limit_wait_timeout = 10.0
+    mock_settings.llm_daily_token_limit = 500000
+    mock_settings.llm_daily_request_limit = 1000
     mock_get_settings.return_value = mock_settings
 
     create_llm_chain(mock_settings)
@@ -112,6 +116,8 @@ def test_create_llm_chain_uses_settings(mock_get_settings, mock_factory_create):
         alert_percent=0.9,
         rate_limit_rpm=120.0,
         rate_limit_wait_timeout=10.0,
+        daily_token_limit=500000,
+        daily_request_limit=1000,
     )
 
 

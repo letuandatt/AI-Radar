@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.core.circuit_breaker import CircuitBreakerOpenError
-from app.core.exceptions import PermanentLLMError, TransientLLMError
+from app.core.exceptions import BudgetExceededError, PermanentLLMError, TransientLLMError
 from app.integrations.llm.groq_provider import GroqProvider
 from app.integrations.llm.ollama_provider import OllamaProvider
 from app.integrations.llm.provider_chain import LLMProviderChain
@@ -191,7 +191,8 @@ class TestGroqStructuredUsage:
         track_args = tracker.track.call_args.args
         assert track_args[2] == 1000  # tokens_in
         assert track_args[3] == 500  # tokens_out
-        assert track_args[4] == pytest.approx(0.000985)  # metered cost > 0
+        # (1000/1M * 0.8) + (500/1M * 4.00) per GROQ_PRICING
+        assert track_args[4] == pytest.approx(0.0028)  # metered cost > 0
 
     @patch("app.integrations.llm.groq_provider.create_groq_chat_model")
     def test_structured_chat_estimates_tokens_when_usage_missing(self, mock_create):
@@ -363,3 +364,108 @@ class TestLLMProviderChain:
         with pytest.raises(RateLimitWaitTimeoutError):
             chain.chat("Hello")
         provider.chat.assert_not_called()
+
+
+# ==============================================================================
+# Chain Budget Gate Tests (B6)
+# ==============================================================================
+
+
+class TestChainBudgetGate:
+    """B6: estimate -> check BEFORE each provider call; denied = no LLM call."""
+
+    def _chain(self, providers, daily_budget_usd: float):
+        from app.core.cost_tracker import CostTracker
+
+        return LLMProviderChain(
+            providers,
+            cost_tracker=CostTracker(daily_budget_usd=daily_budget_usd),
+        )
+
+    def test_denied_provider_is_skipped_free_fallback_runs(self):
+        """$0.05 estimate vs $0.001 budget: expensive provider skipped,
+        free provider (estimate 0) still runs."""
+        expensive = MagicMock()
+        expensive.chat.return_value = "should not happen"
+        expensive.get_provider_name.return_value = "expensive"
+        expensive.estimate_cost.return_value = 0.05
+
+        free = MagicMock()
+        free.chat.return_value = "fallback response"
+        free.get_provider_name.return_value = "free"
+        free.estimate_cost.return_value = 0.0
+
+        chain = self._chain([expensive, free], daily_budget_usd=0.001)
+        result = chain.chat("Hello")
+
+        assert result == "fallback response"
+        expensive.chat.assert_not_called()
+        free.chat.assert_called_once_with("Hello")
+
+    def test_all_providers_denied_raises_budget_error(self):
+        expensive1 = MagicMock()
+        expensive1.get_provider_name.return_value = "p1"
+        expensive1.estimate_cost.return_value = 0.05
+
+        expensive2 = MagicMock()
+        expensive2.get_provider_name.return_value = "p2"
+        expensive2.estimate_cost.return_value = 0.05
+
+        chain = self._chain([expensive1, expensive2], daily_budget_usd=0.001)
+
+        with pytest.raises(BudgetExceededError):
+            chain.chat("Hello")
+
+        expensive1.chat.assert_not_called()
+        expensive2.chat.assert_not_called()
+
+    def test_structured_chat_denied_without_llm_call(self):
+        expensive = MagicMock()
+        expensive.get_provider_name.return_value = "p1"
+        expensive.estimate_cost.return_value = 0.05
+
+        chain = self._chain([expensive], daily_budget_usd=0.001)
+
+        with pytest.raises(BudgetExceededError):
+            chain.structured_chat("Hello", SampleSchema)
+
+        expensive.structured_chat.assert_not_called()
+
+    def test_no_cost_tracker_means_no_budget_check(self):
+        provider = MagicMock()
+        provider.chat.return_value = "ok"
+        provider.get_provider_name.return_value = "p"
+
+        chain = LLMProviderChain([provider])  # no cost_tracker
+        assert chain.chat("Hello") == "ok"
+        provider.chat.assert_called_once()
+
+
+class TestEstimateCost:
+    """B6 estimates: Groq priced, Ollama free, chain delegates to primary."""
+
+    @patch("app.integrations.llm.groq_provider.create_groq_chat_model")
+    def test_groq_estimate_is_positive_and_priced(self, mock_create):
+        provider = GroqProvider(model_name="qwen/qwen3.8-27b")
+        estimate = provider.estimate_cost("a" * 4000)  # ~1000 input tokens
+
+        assert estimate > 0
+        # input ~1000 tokens * 0.8/1M + output 1024 tokens * 4.00/1M (GROQ_PRICING)
+        expected = (1000 / 1_000_000 * 0.8) + (1024 / 1_000_000 * 4.00)
+        assert estimate == pytest.approx(expected, rel=0.05)
+
+    @patch("app.integrations.llm.ollama_provider.create_ollama_chat_model")
+    def test_ollama_estimate_is_zero(self, mock_create):
+        provider = OllamaProvider(model_name="qwen3:4b")
+
+        assert provider.estimate_cost("anything") == 0.0
+
+    def test_chain_delegates_to_primary(self):
+        primary = MagicMock()
+        primary.estimate_cost.return_value = 0.42
+        secondary = MagicMock()
+        secondary.estimate_cost.return_value = 0.0
+
+        chain = LLMProviderChain([primary, secondary])
+
+        assert chain.estimate_cost("Hello") == 0.42
