@@ -24,7 +24,28 @@ class DuplicateJobError(ApplicationError):
 class BudgetExceededError(ApplicationError):
     """Raised when daily LLM budget is exceeded."""
 
-    pass
+
+class RateLimitWaitTimeoutError(ApplicationError):
+    """Raised when waiting for a rate limiter token exceeds the configured timeout."""
+
+
+class TransientLLMError(ApplicationError):
+    """Retryable LLM failure: 408/429/5xx, timeout, connection errors.
+
+    Carries ``retry_after`` (seconds) when the provider supplies a
+    Retry-After hint, which the retry decorator honors over backoff.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class PermanentLLMError(ApplicationError):
+    """Non-retryable LLM failure: 401/403/400, invalid model, schema errors.
+
+    Unknown failures also map here — retrying a bug is worse than failing fast.
+    """
 
 
 def report_application_error(
