@@ -27,10 +27,12 @@ class LLMProviderFactory:
         daily_budget_usd: float = 10.0,
         alert_percent: float = 0.8,
         ollama_model: str = "qwen3:4b",
-        groq_model: str = "qwen/qwen3.6-27b",
+        groq_model: str = "qwen/qwen3.8-27b",
         groq_api_key: SecretStr = SecretStr(""),
         rate_limit_rpm: float | None = None,
         rate_limit_wait_timeout: float = 30.0,
+        daily_token_limit: int | None = None,
+        daily_request_limit: int | None = None,
     ) -> LLMProviderChain:
         """
         Create an LLM provider chain.
@@ -47,6 +49,8 @@ class LLMProviderFactory:
             rate_limit_rpm: Chain-level rate limit in requests per minute
                 (0/None disables the limiter).
             rate_limit_wait_timeout: Max seconds to wait for a rate limiter token.
+            daily_token_limit: Optional pre-request daily token limit.
+            daily_request_limit: Optional pre-request daily request limit.
 
         Returns:
             LLMProviderChain configured with requested providers.
@@ -54,6 +58,8 @@ class LLMProviderFactory:
         cost_tracker = CostTracker(
             daily_budget_usd=daily_budget_usd,
             alert_percent=alert_percent,
+            daily_token_limit=daily_token_limit,
+            daily_request_limit=daily_request_limit,
         )
 
         llm_logger = None
@@ -108,4 +114,5 @@ class LLMProviderFactory:
             providers,
             rate_limiter=rate_limiter,
             rate_limit_wait_timeout=rate_limit_wait_timeout,
+            cost_tracker=cost_tracker,
         )

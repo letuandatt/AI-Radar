@@ -9,7 +9,7 @@ from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from app.core.cost_tracker import CostTracker
 from app.core.exceptions import TransientLLMError
 from app.core.retry import retry_on_transient_error
-from app.integrations.groq.groq_client import create_groq_chat_model
+from app.integrations.groq.groq_client import GROQ_MAX_TOKENS, create_groq_chat_model
 from app.integrations.llm.error_taxonomy import classify_llm_error
 from app.integrations.llm.logger import LLMLogger
 from app.integrations.llm.usage import estimate_tokens, read_usage
@@ -18,7 +18,7 @@ T = TypeVar("T", bound=BaseModel)
 
 # Groq pricing (approximate, per 1M tokens)
 GROQ_PRICING = {
-    "qwen/qwen3.6-27b": {"input": 0.59, "output": 0.79},  # check lại
+    "qwen/qwen3.8-27b": {"input": 0.8, "output": 4.00},
 }
 
 
@@ -35,7 +35,7 @@ class GroqProvider:
 
     def __init__(
         self,
-        model_name: str = "qwen/qwen3.6-27b",
+        model_name: str = "qwen/qwen3.8-27b",
         api_key: SecretStr = SecretStr(""),
         cost_tracker: CostTracker | None = None,
         logger: LLMLogger | None = None,
@@ -52,11 +52,15 @@ class GroqProvider:
 
     def _calculate_cost(self, tokens_in: int, tokens_out: int) -> float:
         """Calculate cost based on Groq pricing."""
-        pricing = GROQ_PRICING.get(self._model_name, {"input": 0.59, "output": 0.79})
+        pricing = self._pricing()
         cost = (tokens_in / 1_000_000 * pricing["input"]) + (
             tokens_out / 1_000_000 * pricing["output"]
         )
         return cost
+
+    def _pricing(self) -> dict[str, float]:
+        """Pricing for the configured model, or the default Groq rates."""
+        return GROQ_PRICING.get(self._model_name, {"input": 0.8, "output": 4.00})
 
     @retry_on_transient_error(
         max_retries=3,
@@ -208,6 +212,15 @@ class GroqProvider:
 
     def get_provider_name(self) -> str:
         return "groq"
+
+    def estimate_cost(self, prompt: str) -> float:
+        """Upper-bound cost estimate from prompt length + max output tokens."""
+        estimated_in = len(prompt) / 4
+        estimated_out = GROQ_MAX_TOKENS
+        pricing = self._pricing()
+        return (estimated_in / 1_000_000 * pricing["input"]) + (
+            estimated_out / 1_000_000 * pricing["output"]
+        )
 
     # ---------------------------------------
     # Private Methods

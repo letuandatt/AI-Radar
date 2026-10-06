@@ -150,6 +150,8 @@ def create_llm_chain(settings: Settings):
         alert_percent=settings.llm_alert_percent,
         rate_limit_rpm=settings.llm_rate_limit_rpm,
         rate_limit_wait_timeout=settings.llm_rate_limit_wait_timeout,
+        daily_token_limit=settings.llm_daily_token_limit,
+        daily_request_limit=settings.llm_daily_request_limit,
     )
 
 

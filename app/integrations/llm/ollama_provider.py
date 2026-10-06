@@ -196,6 +196,10 @@ class OllamaProvider:
     def get_provider_name(self) -> str:
         return "ollama"
 
+    def estimate_cost(self, prompt: str) -> float:
+        """Local Ollama is free — zero cost, never budget-denied."""
+        return 0.0
+
     # ---------------------------------------
     # Private Methods
     # ---------------------------------------
