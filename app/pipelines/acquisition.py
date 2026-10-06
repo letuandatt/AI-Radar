@@ -20,6 +20,7 @@ from app.fetchers.registry import (
 )
 from app.fetchers.rss import RSSFetcher
 from app.fetchers.rss_parser import RSSParser
+from app.models.article import RawArticle
 from app.models.result import AcquisitionResult, SourceError
 from app.storage.history import save_acquisition_result
 
@@ -78,6 +79,7 @@ class DefaultAcquisitionPipeline:
         """
         start_time = time.time()
         errors: list[SourceError] = []
+        collected_articles: list[RawArticle] = []
         total_articles = 0
         successful_sources = 0
         failed_sources = 0
@@ -91,6 +93,7 @@ class DefaultAcquisitionPipeline:
             try:
                 raw_data = self._rss_fetcher.fetch_raw(source)
                 articles = self._rss_parser.parse(raw_data, source)
+                collected_articles.extend(articles)
                 total_articles += len(articles)
                 successful_sources += 1
                 logger.info(
@@ -121,6 +124,8 @@ class DefaultAcquisitionPipeline:
                 issues_data = self._github_fetcher.fetch_issues(repo)
                 issues = self._github_parser.parse_issues(issues_data, repo)
 
+                collected_articles.extend(commits)
+                collected_articles.extend(issues)
                 total_articles += len(commits) + len(issues)
                 successful_sources += 1
                 logger.info(
@@ -147,6 +152,7 @@ class DefaultAcquisitionPipeline:
             try:
                 data = self._hf_fetcher.fetch_json(hf_source)
                 articles = self._hf_parser.parse(data, hf_source)
+                collected_articles.extend(articles)
                 total_articles += len(articles)
                 successful_sources += 1
                 logger.info(
@@ -175,6 +181,7 @@ class DefaultAcquisitionPipeline:
             total_articles=total_articles,
             execution_time=execution_time,
             errors=errors,
+            articles=collected_articles,
         )
 
         logger.info(
