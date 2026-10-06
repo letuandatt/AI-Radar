@@ -15,6 +15,7 @@ from app.models.article import RawArticle
 from app.models.enriched_article import EnrichedArticle
 from app.models.normalized_article import NormalizedArticle
 from app.models.processing_result import ProcessingResult
+from app.services.filtering.relevance_gate import RelevanceGate
 from app.services.knowledge.object_assembler import KnowledgeObjectAssembler
 from app.services.processing_state_service import ProcessingStateService
 
@@ -30,7 +31,7 @@ ExtractionStage = Callable[[NormalizedArticle], EnrichedArticle]
 BatchExtractionStage = Callable[[list[NormalizedArticle]], Awaitable[list[EnrichedArticle]]]
 
 # Checkpoint statuses that mean "this article is already in the repository"
-_STORED_STATUSES = ("success", "skipped")
+# ("skipped" at any stage = terminal skip: filtered, extraction-skipped, ...)
 
 
 class ProcessingPipeline:
@@ -58,6 +59,8 @@ class ProcessingPipeline:
         assembler: KnowledgeObjectAssembler,
         state_service: ProcessingStateService,
         batch_extraction_stage: BatchExtractionStage | None = None,
+        relevance_gate: RelevanceGate | None = None,
+        extraction_batch_size: int = 50,
     ) -> None:
         """Initialize the pipeline with its stage implementations.
 
@@ -70,18 +73,25 @@ class ProcessingPipeline:
             assembler: Service that assembles and persists KnowledgeObjects.
             state_service: Service for tracking item processing state.
             batch_extraction_stage: Async batch extraction callable, invoked
-                once per run on the candidate list.
+                once per chunk of the candidate list (bounded batches).
+            relevance_gate: Optional deterministic pre-LLM filter (C1) —
+                applied between normalization and extraction in run_async().
+            extraction_batch_size: Chunk size for bounded batch extraction.
         """
         if extraction_stage is None and batch_extraction_stage is None:
             raise ValueError(
                 "ProcessingPipeline requires extraction_stage or batch_extraction_stage"
             )
+        if extraction_batch_size < 1:
+            raise ValueError("extraction_batch_size must be >= 1")
         self._cleaning = cleaning_stage
         self._normalization = normalization_stage
         self._extraction = extraction_stage
         self._batch_extraction = batch_extraction_stage
         self._assembler = assembler
         self._state = state_service
+        self._relevance_gate = relevance_gate
+        self._extraction_batch_size = extraction_batch_size
 
     def run(self, raw_articles: list[RawArticle]) -> ProcessingResult:
         """Run the full processing pipeline on a batch of articles (sync).
@@ -116,9 +126,11 @@ class ProcessingPipeline:
 
             # Checkpoint: skip if the article is already in the repository
             state = self._state.get_status(content_hash)
-            if state and state.status in _STORED_STATUSES and state.stage == "stored":
+            if state and (
+                state.status == "skipped" or (state.status == "success" and state.stage == "stored")
+            ):
                 skipped_objects += 1
-                logger.debug("Skipping already stored article: %s", article.url)
+                logger.debug("Skipping already processed article: %s", article.url)
                 continue
 
             current_stage = "cleaned"
@@ -209,6 +221,9 @@ class ProcessingPipeline:
         extracted = 0
         failed_objects = 0
         skipped_objects = 0
+        filtered_objects = 0
+        created_count = 0
+        updated_count = 0
         errors: list[dict] = []
 
         enriched_articles: list[EnrichedArticle] = []
@@ -219,9 +234,11 @@ class ProcessingPipeline:
             content_hash = compute_content_hash(article.url, article.title)
 
             state = self._state.get_status(content_hash)
-            if state and state.status in _STORED_STATUSES and state.stage == "stored":
+            if state and (
+                state.status == "skipped" or (state.status == "success" and state.stage == "stored")
+            ):
                 skipped_objects += 1
-                logger.debug("Skipping already stored article: %s", article.url)
+                logger.debug("Skipping already processed article: %s", article.url)
                 continue
 
             current_stage = "cleaned"
@@ -261,49 +278,79 @@ class ProcessingPipeline:
                     e,
                 )
 
-        # Phase 3: extraction — one async batch call for the whole candidate list
-        if candidates:
-            if self._batch_extraction is not None:
-                extracted, batch_failures = await self._extract_batch_and_mark(
-                    candidates, enriched_articles, errors
-                )
-                failed_objects += batch_failures
-            else:
-                # Sync fallback: per-article extraction stage
-                extraction_stage = self._extraction
-                assert extraction_stage is not None, (
-                    "constructor guarantees a sync stage when no batch stage is set"
-                )
-                for content_hash, normalized_article in candidates:
-                    try:
-                        enriched_article = extraction_stage(normalized_article)
-                        extracted += 1
-                        self._state.update_status(content_hash, "extracted", "success")
-                        enriched_articles.append(enriched_article)
-                    except Exception as e:
-                        failed_objects += 1
-                        self._state.update_status(
-                            content_hash,
-                            "extracted",
-                            "failed",
-                            error_type=type(e).__name__,
-                            error_message=str(e),
-                        )
-                        errors.append(
-                            {
-                                "url": normalized_article.url,
-                                "stage": "extracted",
-                                "error_type": type(e).__name__,
-                                "error_message": str(e),
-                            }
-                        )
-                        logger.error("Extraction failed for %s: %s", normalized_article.url, e)
+        # Phase 3: relevance gate (C1) — deterministic, before any LLM call
+        if candidates and self._relevance_gate is not None:
+            kept, filtered = self._relevance_gate.filter(
+                [normalized for _, normalized in candidates]
+            )
+            kept_urls = {article.url for article in kept}
+            for item in filtered:
+                for c_hash, norm in candidates:
+                    if norm.url == item.url:
+                        self._state.update_status(c_hash, "filtered", "skipped")
+                        break
+            candidates = [
+                (content_hash, normalized)
+                for content_hash, normalized in candidates
+                if normalized.url in kept_urls
+            ]
+            filtered_objects = len(filtered)
 
-        # Phase 4: Assembly + honest checkpoint marking (A4)
-        created_count, updated_count, stored_failures = self._assemble_and_mark(
-            enriched_articles, errors
-        )
-        failed_objects += stored_failures
+        # Phase 4: bounded-batch extraction (C2) — chunk the candidate list so
+        # task creation is bounded and checkpoints flush after every chunk.
+        if candidates and self._batch_extraction is not None:
+            for chunk_start in range(0, len(candidates), self._extraction_batch_size):
+                chunk = candidates[chunk_start : chunk_start + self._extraction_batch_size]
+                chunk_extracted, batch_failures = await self._extract_batch_and_mark(
+                    chunk, enriched_articles, errors
+                )
+                extracted += chunk_extracted
+                failed_objects += batch_failures
+
+                # Assembly per chunk + flush: crash mid-run keeps finished chunks
+                chunk_created, chunk_updated, stored_failures = self._assemble_and_mark(
+                    enriched_articles, errors
+                )
+                created_count += chunk_created
+                updated_count += chunk_updated
+                failed_objects += stored_failures
+                enriched_articles = []
+                self._state.flush()
+        elif candidates:
+            # Sync fallback: per-article extraction stage (no chunking needed)
+            extraction_stage = self._extraction
+            assert extraction_stage is not None, (
+                "constructor guarantees a sync stage when no batch stage is set"
+            )
+            for content_hash, normalized_article in candidates:
+                try:
+                    enriched_article = extraction_stage(normalized_article)
+                    extracted += 1
+                    self._state.update_status(content_hash, "extracted", "success")
+                    enriched_articles.append(enriched_article)
+                except Exception as e:
+                    failed_objects += 1
+                    self._state.update_status(
+                        content_hash,
+                        "extracted",
+                        "failed",
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                    )
+                    errors.append(
+                        {
+                            "url": normalized_article.url,
+                            "stage": "extracted",
+                            "error_type": type(e).__name__,
+                            "error_message": str(e),
+                        }
+                    )
+                    logger.error("Extraction failed for %s: %s", normalized_article.url, e)
+
+            created_count, updated_count, stored_failures = self._assemble_and_mark(
+                enriched_articles, errors
+            )
+            failed_objects += stored_failures
 
         self._state.flush()
 
@@ -317,6 +364,7 @@ class ProcessingPipeline:
             updated_count=updated_count,
             failed_objects=failed_objects,
             skipped_objects=skipped_objects,
+            filtered_objects=filtered_objects,
             errors=errors,
         )
 
@@ -442,6 +490,7 @@ class ProcessingPipeline:
         failed_objects: int,
         skipped_objects: int,
         errors: list[dict],
+        filtered_objects: int = 0,
     ) -> ProcessingResult:
         """Build the ProcessingResult and log the run summary."""
         duration = time.time() - start_time
@@ -455,6 +504,7 @@ class ProcessingPipeline:
             objects_updated=updated_count,
             failed_objects=failed_objects,
             skipped_objects=skipped_objects,
+            filtered_objects=filtered_objects,
             processing_duration=duration,
             errors=errors,
         )
@@ -462,7 +512,7 @@ class ProcessingPipeline:
         logger.info(
             "Pipeline completed: input=%d, cleaned=%d, normalized=%d, "
             "extracted=%d, created=%d, updated=%d, failed=%d, skipped=%d, "
-            "duration=%.2fs",
+            "filtered=%d, duration=%.2fs",
             result.total_input,
             result.cleaned,
             result.normalized,
@@ -471,6 +521,7 @@ class ProcessingPipeline:
             result.objects_updated,
             result.failed_objects,
             result.skipped_objects,
+            result.filtered_objects,
             result.processing_duration,
         )
 
