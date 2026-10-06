@@ -5,7 +5,7 @@ This file contains ALL Groq-specific parameters. To adjust model settings
 Do NOT dig into LangChain source code.
 
 Provider: Groq (via langchain-groq)
-Fallback Model: qwen/qwen3.6-27b
+Fallback Model: qwen/qwen3.8-27b
 """
 
 from langchain_groq import ChatGroq
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 # ============================================================================
 # GROQ MODEL PARAMETERS — Edit here to adjust behavior
 # ============================================================================
-GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_MODEL = "qwen/qwen3.8-27b"
 GROQ_TEMPERATURE = 0.1  # Low = deterministic extraction
 GROQ_MAX_TOKENS = 1024  # summary + topics + entities + score
 GROQ_MAX_RETRIES = 0
