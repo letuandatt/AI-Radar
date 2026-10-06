@@ -6,7 +6,7 @@ keeping database-specific configuration details out of the application core.
 
 from pathlib import Path
 
-from app.config.settings import Settings
+from app.config.settings import Settings, get_settings
 from app.core.logger import get_logger
 from app.services.analysis.content_analyzer import ContentAnalyzer
 from app.services.repository.config import RepositoryConfig
@@ -128,6 +128,10 @@ def create_retrieval_service(initializer: "RepositoryInitializer"):
 def create_analysis_service(initializer: RepositoryInitializer) -> ContentAnalyzer:
     """Create ContentAnalyzer service from repository initializer.
 
+    The LLM provider chain is fully settings-driven: provider order,
+    model names, budget and alert threshold all come from Settings
+    so switching models never requires code changes.
+
     Args:
         initializer: Initialized repository with all stores ready.
 
@@ -138,11 +142,20 @@ def create_analysis_service(initializer: RepositoryInitializer) -> ContentAnalyz
     from app.prompts.loader import PromptLoader
     from app.services.repository.access_service import RepositoryAccessService
 
+    settings = get_settings()
+
     access_service = RepositoryAccessService(initializer.sqlite_store)
 
     llm_chain = LLMProviderFactory.create(
-        primary_provider="ollama",
-        fallback_providers=None,  # No fallback for analysis
+        primary_provider=settings.llm_primary_provider,
+        fallback_providers=settings.llm_fallback_providers or None,
+        ollama_model=settings.ollama_model,
+        groq_model=settings.groq_model,
+        groq_api_key=settings.groq_api_key,
+        daily_budget_usd=settings.llm_daily_budget_usd,
+        alert_percent=settings.llm_alert_percent,
+        rate_limit_rpm=settings.llm_rate_limit_rpm,
+        rate_limit_wait_timeout=settings.llm_rate_limit_wait_timeout,
     )
 
     prompt_loader = PromptLoader()
@@ -151,4 +164,5 @@ def create_analysis_service(initializer: RepositoryInitializer) -> ContentAnalyz
         access_service=access_service,
         llm_provider=llm_chain,
         prompt_loader=prompt_loader,
+        max_concurrent=settings.llm_max_concurrent,
     )
