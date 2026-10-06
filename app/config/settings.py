@@ -1,5 +1,6 @@
 from datetime import time
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -112,6 +113,17 @@ class Settings(BaseSettings):
         default=False,
         description="Run acquisition pipeline immediately on application startup (dev only). "
         "Startup only initializes infrastructure; ingestion is triggered by the scheduled job.",
+    )
+
+    knowledge_update_enabled: bool = Field(
+        default=True,
+        description="Chain the processing pipeline onto the acquisition job "
+        "(acquisition → processing → repository).",
+    )
+
+    processing_state_path: Path = Field(
+        default=Path("app/storage/processing_state.json"),
+        description="File path for the processing checkpoint state.",
     )
 
     # --- Discovery Config ---
