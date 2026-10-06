@@ -6,6 +6,7 @@ from pydantic import SecretStr
 
 from app.core.cost_tracker import CostTracker
 from app.core.logger import get_logger
+from app.core.rate_limiter import TokenBucket
 from app.integrations.llm.groq_provider import GroqProvider
 from app.integrations.llm.logger import LLMLogger
 from app.integrations.llm.ollama_provider import OllamaProvider
@@ -28,6 +29,8 @@ class LLMProviderFactory:
         ollama_model: str = "qwen3:4b",
         groq_model: str = "qwen/qwen3.6-27b",
         groq_api_key: SecretStr = SecretStr(""),
+        rate_limit_rpm: float | None = None,
+        rate_limit_wait_timeout: float = 30.0,
     ) -> LLMProviderChain:
         """
         Create an LLM provider chain.
@@ -41,6 +44,9 @@ class LLMProviderFactory:
             ollama_model: Ollama model name.
             groq_model: Groq model name.
             groq_api_key: Groq API key.
+            rate_limit_rpm: Chain-level rate limit in requests per minute
+                (0/None disables the limiter).
+            rate_limit_wait_timeout: Max seconds to wait for a rate limiter token.
 
         Returns:
             LLMProviderChain configured with requested providers.
@@ -53,6 +59,14 @@ class LLMProviderFactory:
         llm_logger = None
         if db_path:
             llm_logger = LLMLogger(db_path)
+
+        rate_limiter: TokenBucket | None = None
+        if rate_limit_rpm and rate_limit_rpm > 0:
+            rate_per_second = rate_limit_rpm / 60.0
+            rate_limiter = TokenBucket(
+                rate=rate_per_second,
+                capacity=max(1.0, rate_per_second),
+            )
 
         provider_order = [primary_provider]
         if fallback_providers:
@@ -90,4 +104,8 @@ class LLMProviderFactory:
             [p.get_provider_name() for p in providers],
         )
 
-        return LLMProviderChain(providers)
+        return LLMProviderChain(
+            providers,
+            rate_limiter=rate_limiter,
+            rate_limit_wait_timeout=rate_limit_wait_timeout,
+        )
