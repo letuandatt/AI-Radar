@@ -712,3 +712,79 @@ class TestAsyncPipeline:
         assert state is not None
         assert state.stage == "extracted"
         assert state.status == "skipped"
+
+
+# ==============================================================================
+# Checkpoint Persistence Tests (A4 review regression)
+# ==============================================================================
+
+
+class TestCheckpointPersistence:
+    """flush() must write checkpoints to disk — verified by reloading the
+    state file in a FRESH service, not by asserting the in-memory service."""
+
+    def _fresh_service(self, state_file: Path) -> ProcessingStateService:
+        return ProcessingStateService(storage=ProcessingStateStorage(file_path=state_file))
+
+    def test_run_persists_checkpoint_to_disk(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        mock_assembler: MagicMock,
+        tmp_path: Path,
+        sample_article: RawArticle,
+    ) -> None:
+        state_file = tmp_path / "persist.json"
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=mock_extraction,
+            assembler=mock_assembler,
+            state_service=self._fresh_service(state_file),
+        )
+        pipeline.run([sample_article])
+
+        reloaded = self._fresh_service(state_file)
+        state = reloaded.get_status(compute_content_hash(sample_article.url, sample_article.title))
+        assert state is not None
+        assert state.stage == "stored"
+        assert state.status == "success"
+
+    async def test_run_async_persists_checkpoint_to_disk(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_assembler: MagicMock,
+        tmp_path: Path,
+        sample_article: RawArticle,
+    ) -> None:
+        state_file = tmp_path / "persist.json"
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            return [
+                EnrichedArticle(
+                    article=a,
+                    extraction=ExtractionResult(
+                        summary="s", topics=["t"], entities=["e"], relevance_score=0.5
+                    ),
+                    extraction_status="success",
+                )
+                for a in articles
+            ]
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=mock_assembler,
+            state_service=self._fresh_service(state_file),
+            batch_extraction_stage=batch,
+        )
+        await pipeline.run_async([sample_article])
+
+        reloaded = self._fresh_service(state_file)
+        state = reloaded.get_status(compute_content_hash(sample_article.url, sample_article.title))
+        assert state is not None
+        assert state.stage == "stored"
+        assert state.status == "success"
