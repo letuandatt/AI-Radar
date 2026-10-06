@@ -27,25 +27,26 @@ GROQ_MAX_RETRIES = 0
 # ============================================================================
 
 
-def create_groq_chat_model(api_key: SecretStr) -> ChatGroq:
+def create_groq_chat_model(api_key: SecretStr, model: str = GROQ_MODEL) -> ChatGroq:
     """Create a configured ChatGroq instance.
 
     Args:
         api_key: Groq API key (from settings/env).
+        model: Groq model name (defaults to GROQ_MODEL constant).
 
     Returns:
         Configured ChatGroq instance ready for use.
     """
     logger.info(
-        "Creating Groq chat model: %s (temp=%.1f, max_tokens=%d)",
-        GROQ_MODEL,
+        "Creating Groq chat model: %s (temp=%.1f, max_tokens=%d, retries=%d)",
+        model,
         GROQ_TEMPERATURE,
         GROQ_MAX_TOKENS,
         GROQ_MAX_RETRIES,
     )
 
     return ChatGroq(
-        model=GROQ_MODEL,
+        model=model,
         api_key=api_key,
         temperature=GROQ_TEMPERATURE,
         max_tokens=GROQ_MAX_TOKENS,
