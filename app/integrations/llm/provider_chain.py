@@ -5,74 +5,51 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from app.core.circuit_breaker import CircuitBreakerOpenError
-from app.core.exceptions import RateLimitWaitTimeoutError, TransientLLMError
 from app.core.logger import get_logger
-from app.core.rate_limiter import TokenBucket
 from app.integrations.llm.provider import LLMProvider
 
 logger = get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-# Only provider-level failures justify fallback: an open circuit or a
-# transient error (429/timeout/5xx). App bugs (schema, serialization, state)
-# raise immediately — falling back would mask them (Wiring & Fix Plan B5).
-_FALLBACK_ERRORS = (CircuitBreakerOpenError, TransientLLMError)
-
 
 class LLMProviderChain:
     """
     Chain of LLM providers with fallback.
 
-    Tries providers in order. If one fails with a provider-level failure
-    (circuit breaker open or transient error), moves to the next provider.
-    Any other exception is a bug and propagates immediately.
+    Tries providers in order. If one fails (CircuitBreaker open or transient error),
+    moves to the next provider.
 
     Args:
         providers: List of LLM providers in priority order.
-        rate_limiter: Optional shared TokenBucket applied before every provider
-            call. The limit belongs at the chain (gateway) level, not per
-            provider — a Groq→Ollama fallback must not be throttled twice.
-        rate_limit_wait_timeout: Max seconds to wait for a token before
-            raising RateLimitWaitTimeoutError (no provider is called).
     """
 
-    def __init__(
-        self,
-        providers: list[LLMProvider],
-        rate_limiter: TokenBucket | None = None,
-        rate_limit_wait_timeout: float = 30.0,
-    ) -> None:
+    def __init__(self, providers: list[LLMProvider]) -> None:
         if not providers:
             raise ValueError("At least one provider is required")
         self._providers = providers
-        self._rate_limiter = rate_limiter
-        self._rate_limit_wait_timeout = rate_limit_wait_timeout
-
-    def _acquire(self) -> None:
-        """Block until a rate limiter token is available or time out."""
-        if self._rate_limiter is None:
-            return
-        if not self._rate_limiter.wait_and_acquire(timeout=self._rate_limit_wait_timeout):
-            raise RateLimitWaitTimeoutError(
-                f"Rate limiter wait exceeded {self._rate_limit_wait_timeout}s"
-            )
 
     def chat(self, prompt: str, **kwargs: object) -> str:
         """Try each provider in order until one succeeds."""
-        last_error: BaseException | None = None
+        last_error = None
 
         for provider in self._providers:
-            self._acquire()
             try:
                 return provider.chat(prompt, **kwargs)
-            except _FALLBACK_ERRORS as e:
+            except CircuitBreakerOpenError as e:
                 logger.warning(
-                    "Provider %s failed (%s), trying next provider",
+                    "Provider %s circuit breaker open, trying next provider",
                     provider.get_provider_name(),
-                    type(e).__name__,
                 )
                 last_error = e
+                continue
+            except Exception as e:
+                logger.warning(
+                    "Provider %s failed: %s, trying next provider",
+                    provider.get_provider_name(),
+                    str(e),
+                )
+                last_error = e  # type: ignore[assignment]
                 continue
 
         # All providers failed
@@ -82,19 +59,25 @@ class LLMProviderChain:
 
     def structured_chat(self, prompt: str, schema: type[T]) -> T:
         """Try each provider in order until one succeeds."""
-        last_error: BaseException | None = None
+        last_error = None
 
         for provider in self._providers:
-            self._acquire()
             try:
                 return provider.structured_chat(prompt, schema)
-            except _FALLBACK_ERRORS as e:
+            except CircuitBreakerOpenError as e:
                 logger.warning(
-                    "Provider %s failed (%s), trying next provider",
+                    "Provider %s circuit breaker open, trying next provider",
                     provider.get_provider_name(),
-                    type(e).__name__,
                 )
                 last_error = e
+                continue
+            except Exception as e:
+                logger.warning(
+                    "Provider %s failed: %s, trying next provider",
+                    provider.get_provider_name(),
+                    str(e),
+                )
+                last_error = e  # type: ignore[assignment]
                 continue
 
         # All providers failed

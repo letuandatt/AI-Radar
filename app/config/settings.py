@@ -22,43 +22,7 @@ class Settings(BaseSettings):
     zalo_access_token: str
     zalo_webhook_secret: str
 
-    # --- LLM Config ---
-    llm_primary_provider: str = Field(
-        default="ollama",
-        description="Primary LLM provider ('ollama' or 'groq').",
-    )
-    llm_fallback_providers: list[str] = Field(
-        default_factory=list,
-        description="Fallback LLM providers, tried in order when the primary fails.",
-    )
-    groq_model: str = Field(
-        default="qwen/qwen3.6-27b",
-        description="Groq model name.",
-    )
-    ollama_model: str = Field(
-        default="qwen3:4b",
-        description="Ollama model name.",
-    )
-    llm_daily_budget_usd: float = Field(
-        default=10.0,
-        description="Daily LLM spending budget in USD.",
-    )
-    llm_alert_percent: float = Field(
-        default=0.8,
-        description="Budget alert threshold as a fraction of the daily budget (0.0-1.0).",
-    )
-    llm_rate_limit_rpm: float = Field(
-        default=60.0,
-        description="Chain-level rate limit in requests per minute (0 disables).",
-    )
-    llm_rate_limit_wait_timeout: float = Field(
-        default=30.0,
-        description="Max seconds to wait for a rate limiter token before failing a call.",
-    )
-    llm_max_concurrent: int = Field(
-        default=4,
-        description="Max concurrent LLM calls per analysis batch (semaphore limit).",
-    )
+    llm_provider: str = Field(default="ollama", description="LLM provider to use.")
 
     rss_sources: list[dict[str, str]] = Field(
         default_factory=list,
@@ -109,9 +73,8 @@ class Settings(BaseSettings):
     )
 
     acquisition_run_on_startup: bool = Field(
-        default=False,
-        description="Run acquisition pipeline immediately on application startup (dev only). "
-        "Startup only initializes infrastructure; ingestion is triggered by the scheduled job.",
+        default=True,
+        description="Whether to run acquisition pipeline immediately on application startup.",
     )
 
     # --- Discovery Config ---

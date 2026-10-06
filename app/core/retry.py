@@ -44,10 +44,6 @@ def retry_on_transient_error(
                         raise
 
                     delay = min(base_delay * (backoff_factor ** (attempt - 1)), max_delay)
-                    # A provider-supplied Retry-After hint overrides backoff.
-                    retry_after = getattr(e, "retry_after", None)
-                    if isinstance(retry_after, (int, float)) and retry_after > 0:
-                        delay = min(float(retry_after), max_delay)
                     delay += random.uniform(0, delay * jitter)
 
                     logger.warning(
