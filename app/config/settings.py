@@ -73,8 +73,9 @@ class Settings(BaseSettings):
     )
 
     acquisition_run_on_startup: bool = Field(
-        default=True,
-        description="Whether to run acquisition pipeline immediately on application startup.",
+        default=False,
+        description="Run acquisition pipeline immediately on application startup (dev only). "
+        "Startup only initializes infrastructure; ingestion is triggered by the scheduled job.",
     )
 
     # --- Discovery Config ---
