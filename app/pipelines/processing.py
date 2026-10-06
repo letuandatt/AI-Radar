@@ -172,6 +172,8 @@ class ProcessingPipeline:
         )
         failed_objects += stored_failures
 
+        self._state.flush()
+
         return self._build_result(
             start_time=start_time,
             total_input=total_input,
@@ -302,6 +304,8 @@ class ProcessingPipeline:
             enriched_articles, errors
         )
         failed_objects += stored_failures
+
+        self._state.flush()
 
         return self._build_result(
             start_time=start_time,
