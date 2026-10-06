@@ -22,6 +22,7 @@ from app.services.cleaning.duplicate_detector import DuplicateDetector
 from app.services.cleaning.raw_validator import RawDataValidator
 from app.services.extraction.content_sanitizer import ContentSanitizer
 from app.services.extraction.metadata_extractor import MetadataExtractor
+from app.services.filtering.relevance_gate import RelevanceGate
 from app.services.knowledge.object_assembler import KnowledgeObjectAssembler
 from app.services.knowledge.object_builder import ObjectBuilder
 from app.services.knowledge.object_validator import KnowledgeObjectValidator
@@ -94,10 +95,21 @@ def build_processing_pipeline(
         # Contract: one EnrichedArticle per input, same order.
         return await extractor.extract_batch(articles)
 
+    gate = (
+        RelevanceGate(
+            min_content_length=settings.gate_min_content_length,
+            max_article_age_days=settings.gate_max_article_age_days,
+            topic_keywords=settings.gate_topic_keywords,
+        )
+        if settings.gate_enabled
+        else None
+    )
+
     logger.info(
-        "Processing pipeline built: provider=%s, max_concurrent=%d",
+        "Processing pipeline built: provider=%s, max_concurrent=%d, batch_size=%d",
         llm_provider.get_provider_name(),
         settings.llm_max_concurrent,
+        settings.llm_batch_size,
     )
 
     return ProcessingPipeline(
@@ -107,6 +119,8 @@ def build_processing_pipeline(
         assembler=assembler,
         state_service=state_service,
         batch_extraction_stage=batch_extraction_stage,
+        relevance_gate=gate,
+        extraction_batch_size=settings.llm_batch_size,
     )
 
 
