@@ -28,7 +28,7 @@ from ..services.repository import (
     create_retrieval_service,
     initialize_knowledge_repository,
 )
-from ..services.repository.bootstrap import create_analysis_service
+from ..services.repository.bootstrap import create_analysis_service, create_llm_chain
 from ..storage.base import get_storage, initialize_storage, shutdown_storage
 from .lifecycle import ApplicationLifecycle
 
@@ -239,6 +239,23 @@ def _shutdown_acquisition(pipeline: DefaultAcquisitionPipeline) -> None:
     logger.debug("Acquisition pipeline shutdown (no-op)")
 
 
+def _init_llm_chain():
+    """Create the shared LLM provider chain for ALL LLM workloads.
+
+    One chain = one budget, one rate limiter, one fallback policy across
+    analysis and extraction.
+
+    Returns:
+        LLMProviderChain built from settings.
+    """
+    return create_llm_chain(get_settings())
+
+
+def _shutdown_llm_chain(llm_chain) -> None:
+    """Shutdown the LLM chain (no-op, providers hold no resources)."""
+    logger.debug("LLM provider chain shutdown (no-op)")
+
+
 def _init_processing() -> ProcessingPipeline:
     """Initialize the Processing Pipeline wired to the knowledge repository (A1).
 
@@ -250,7 +267,8 @@ def _init_processing() -> ProcessingPipeline:
     """
     assert _registry is not None, "ComponentRegistry must be initialized"
     initializer = _registry.get_component("repository")
-    return build_processing_pipeline(initializer, get_settings())
+    llm_chain = _registry.get_component("llm_chain")
+    return build_processing_pipeline(initializer, get_settings(), llm_chain)
 
 
 def _shutdown_processing(pipeline: ProcessingPipeline) -> None:
@@ -261,7 +279,8 @@ def _shutdown_processing(pipeline: ProcessingPipeline) -> None:
 def _init_analysis():
     """Initialize Content Analysis Service."""
     initializer = _registry.get_component("repository")
-    return create_analysis_service(initializer)
+    llm_chain = _registry.get_component("llm_chain")
+    return create_analysis_service(initializer, llm_chain)
 
 
 def _shutdown_analysis(analysis_service) -> None:
@@ -300,6 +319,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
             _shutdown_app_service,
             priority=35,
         )
+        _registry.register("llm_chain", _init_llm_chain, _shutdown_llm_chain, priority=36)
         _registry.register("analysis", _init_analysis, _shutdown_analysis, priority=37)
         _registry.register("processing", _init_processing, _shutdown_processing, priority=38)
         _registry.register("acquisition", _init_acquisition, _shutdown_acquisition, priority=40)
