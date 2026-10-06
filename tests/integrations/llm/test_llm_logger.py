@@ -74,7 +74,7 @@ class TestLLMLogger:
 
         logger.log(
             provider="groq",
-            model="qwen/qwen3.6-27b",
+            model="qwen/qwen3.8-27b",
             prompt="Hello",
             response="{}",
             tokens_in=100,
