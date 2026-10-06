@@ -18,6 +18,8 @@ from ..fetchers.registry import (
     initialize_source_registry,
 )
 from ..pipelines.acquisition import DefaultAcquisitionPipeline
+from ..pipelines.knowledge_update import build_processing_pipeline, run_knowledge_update
+from ..pipelines.processing import ProcessingPipeline
 from ..services.repository import (
     create_application_services,
     create_retrieval_service,
@@ -152,6 +154,14 @@ def _init_acquisition() -> DefaultAcquisitionPipeline:
     assert _registry is not None, "ComponentRegistry must be initialized"
     scheduler: Scheduler = _registry.get_component("scheduler")
 
+    # Get the processing pipeline (A1: acquisition forwards articles to it)
+    processing_pipeline: ProcessingPipeline | None = None
+    if settings.knowledge_update_enabled:
+        try:
+            processing_pipeline = _registry.get_component("processing")
+        except Exception as e:
+            logger.warning("Processing pipeline unavailable; job will be acquisition-only: %s", e)
+
     # Create pipeline with all registries
     pipeline = DefaultAcquisitionPipeline(
         rss_registry=get_source_registry(),
@@ -172,9 +182,28 @@ def _init_acquisition() -> DefaultAcquisitionPipeline:
         )
 
     # Register as a scheduled job
+    def knowledge_update_job() -> None:
+        """Run acquisition, then forward its articles into processing (A1)."""
+        acquisition_result = pipeline.run()
+        if processing_pipeline is None or not acquisition_result.articles:
+            return
+        try:
+            processing_result = run_knowledge_update(acquisition_result, processing_pipeline)
+        except Exception as error:
+            logger.error("Knowledge update failed: %s", error, exc_info=True)
+            return
+        if processing_result is None:
+            return
+        logger.info(
+            "Knowledge update completed: created=%d, updated=%d, failed=%d",
+            processing_result.objects_created,
+            processing_result.objects_updated,
+            processing_result.failed_objects,
+        )
+
     job = Job(
         job_id="acquisition_pipeline",
-        func=pipeline.run,
+        func=knowledge_update_job,
         schedule=settings.acquisition_schedule_time,
     )
     scheduler.register_job(job)
@@ -205,6 +234,25 @@ def _init_acquisition() -> DefaultAcquisitionPipeline:
 def _shutdown_acquisition(pipeline: DefaultAcquisitionPipeline) -> None:
     """Shutdown the acquisition pipeline (no-op, pipeline is stateless)."""
     logger.debug("Acquisition pipeline shutdown (no-op)")
+
+
+def _init_processing() -> ProcessingPipeline:
+    """Initialize the Processing Pipeline wired to the knowledge repository (A1).
+
+    Composes cleaning/normalization/extraction stages with the repository's
+    SQLite knowledge store so processed articles are actually persisted.
+
+    Returns:
+        Fully wired ProcessingPipeline.
+    """
+    assert _registry is not None, "ComponentRegistry must be initialized"
+    initializer = _registry.get_component("repository")
+    return build_processing_pipeline(initializer, get_settings())
+
+
+def _shutdown_processing(pipeline: ProcessingPipeline) -> None:
+    """Shutdown the processing pipeline (no-op, stages are stateless)."""
+    logger.debug("Processing pipeline shutdown (no-op)")
 
 
 def _init_analysis():
@@ -250,6 +298,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
             priority=35,
         )
         _registry.register("analysis", _init_analysis, _shutdown_analysis, priority=37)
+        _registry.register("processing", _init_processing, _shutdown_processing, priority=38)
         _registry.register("acquisition", _init_acquisition, _shutdown_acquisition, priority=40)
 
         # Start all components
