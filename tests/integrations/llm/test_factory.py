@@ -6,7 +6,7 @@ import pytest
 from pydantic import SecretStr
 
 from app.integrations.llm.factory import LLMProviderFactory
-from app.services.repository.bootstrap import create_analysis_service
+from app.services.repository.bootstrap import create_analysis_service, create_llm_chain
 
 
 @patch("app.integrations.llm.ollama_provider.create_ollama_chat_model")
@@ -64,14 +64,30 @@ def test_factory_passes_budget_to_cost_tracker(mock_groq_create, mock_ollama_cre
 
 @patch("app.services.repository.bootstrap.ContentAnalyzer")
 @patch("app.services.repository.access_service.RepositoryAccessService")
-@patch("app.integrations.llm.factory.LLMProviderFactory.create")
 @patch("app.services.repository.bootstrap.get_settings")
-def test_create_analysis_service_uses_settings(
+def test_create_analysis_service_uses_injected_chain(
     mock_get_settings,
-    mock_factory_create,
     mock_access_cls,
     mock_analyzer_cls,
 ):
+    """Analysis must use the SHARED chain — one budget across workloads."""
+    mock_settings = MagicMock()
+    mock_settings.llm_max_concurrent = 8
+    mock_get_settings.return_value = mock_settings
+
+    llm_chain = MagicMock(name="shared_llm_chain")
+
+    create_analysis_service(MagicMock(name="initializer"), llm_chain)
+
+    kwargs = mock_analyzer_cls.call_args.kwargs
+    assert kwargs["llm_provider"] is llm_chain
+    assert kwargs["max_concurrent"] == 8
+
+
+@patch("app.integrations.llm.factory.LLMProviderFactory.create")
+@patch("app.services.repository.bootstrap.get_settings")
+def test_create_llm_chain_uses_settings(mock_get_settings, mock_factory_create):
+    """create_llm_chain builds the one shared chain fully from settings."""
     mock_settings = MagicMock()
     mock_settings.llm_primary_provider = "groq"
     mock_settings.llm_fallback_providers = ["ollama"]
@@ -82,12 +98,9 @@ def test_create_analysis_service_uses_settings(
     mock_settings.llm_alert_percent = 0.9
     mock_settings.llm_rate_limit_rpm = 120.0
     mock_settings.llm_rate_limit_wait_timeout = 10.0
-    mock_settings.llm_max_concurrent = 8
     mock_get_settings.return_value = mock_settings
 
-    mock_factory_create.return_value = MagicMock(name="llm_chain")
-
-    create_analysis_service(MagicMock(name="initializer"))
+    create_llm_chain(mock_settings)
 
     mock_factory_create.assert_called_once_with(
         primary_provider="groq",
@@ -100,7 +113,6 @@ def test_create_analysis_service_uses_settings(
         rate_limit_rpm=120.0,
         rate_limit_wait_timeout=10.0,
     )
-    assert mock_analyzer_cls.call_args.kwargs["max_concurrent"] == 8
 
 
 @patch("app.integrations.llm.ollama_provider.create_ollama_chat_model")
