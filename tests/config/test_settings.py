@@ -117,3 +117,70 @@ def test_acquisition_run_on_startup_can_be_enabled_via_env(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.acquisition_run_on_startup is True
+
+
+def test_llm_settings_defaults(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
+    monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
+    monkeypatch.setenv("ZALO_APP_ID", "test-zalo-app-id")
+    monkeypatch.setenv("ZALO_APP_SECRET", "test-zalo-app-secret")
+    monkeypatch.setenv("ZALO_ACCESS_TOKEN", "test-zalo-access-token")
+    monkeypatch.setenv("ZALO_WEBHOOK_SECRET", "test-zalo-webhook-secret")
+    for var in (
+        "LLM_PRIMARY_PROVIDER",
+        "LLM_FALLBACK_PROVIDERS",
+        "GROQ_MODEL",
+        "OLLAMA_MODEL",
+        "LLM_DAILY_BUDGET_USD",
+        "LLM_ALERT_PERCENT",
+        "LLM_RATE_LIMIT_RPM",
+        "LLM_RATE_LIMIT_WAIT_TIMEOUT",
+        "LLM_MAX_CONCURRENT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_primary_provider == "ollama"
+    assert settings.llm_fallback_providers == []
+    assert settings.groq_model == "qwen/qwen3.6-27b"
+    assert settings.ollama_model == "qwen3:4b"
+    assert settings.llm_daily_budget_usd == 10.0
+    assert settings.llm_alert_percent == 0.8
+    assert settings.llm_rate_limit_rpm == 60.0
+    assert settings.llm_rate_limit_wait_timeout == 30.0
+    assert settings.llm_max_concurrent == 4
+
+
+def test_llm_settings_read_from_env(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
+    monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
+    monkeypatch.setenv("ZALO_APP_ID", "test-zalo-app-id")
+    monkeypatch.setenv("ZALO_APP_SECRET", "test-zalo-app-secret")
+    monkeypatch.setenv("ZALO_ACCESS_TOKEN", "test-zalo-access-token")
+    monkeypatch.setenv("ZALO_WEBHOOK_SECRET", "test-zalo-webhook-secret")
+    monkeypatch.setenv("LLM_PRIMARY_PROVIDER", "groq")
+    monkeypatch.setenv("LLM_FALLBACK_PROVIDERS", '["ollama"]')
+    monkeypatch.setenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:8b")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "5.5")
+    monkeypatch.setenv("LLM_ALERT_PERCENT", "0.9")
+    monkeypatch.setenv("LLM_RATE_LIMIT_RPM", "120")
+    monkeypatch.setenv("LLM_RATE_LIMIT_WAIT_TIMEOUT", "10")
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "8")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_primary_provider == "groq"
+    assert settings.llm_fallback_providers == ["ollama"]
+    assert settings.groq_model == "llama-3.3-70b-versatile"
+    assert settings.ollama_model == "qwen3:8b"
+    assert settings.llm_daily_budget_usd == 5.5
+    assert settings.llm_alert_percent == 0.9
+    assert settings.llm_rate_limit_rpm == 120.0
+    assert settings.llm_rate_limit_wait_timeout == 10.0
+    assert settings.llm_max_concurrent == 8
