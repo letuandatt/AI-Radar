@@ -145,7 +145,7 @@ def test_llm_settings_defaults(monkeypatch):
 
     assert settings.llm_primary_provider == "ollama"
     assert settings.llm_fallback_providers == []
-    assert settings.groq_model == "qwen/qwen3.6-27b"
+    assert settings.groq_model == "qwen/qwen3.8-27b"
     assert settings.ollama_model == "qwen3:4b"
     assert settings.llm_daily_budget_usd == 10.0
     assert settings.llm_alert_percent == 0.8
