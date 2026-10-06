@@ -37,6 +37,21 @@ class LLMProvider(Protocol):
         """
         ...
 
+    def estimate_cost(self, prompt: str) -> float:
+        """
+        Estimate the USD cost of a request BEFORE running it (B6).
+
+        Free/local providers return 0.0. Estimates are always upper-bound
+        inputs to CostTracker.check_budget — never billing data.
+
+        Args:
+            prompt: The prompt string.
+
+        Returns:
+            Estimated cost in USD.
+        """
+        ...
+
     def get_model_name(self) -> str:
         """Get the model name."""
         ...
