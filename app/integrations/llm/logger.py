@@ -25,7 +25,7 @@ class LLMLogger:
         self._init_table()
 
     def _init_table(self) -> None:
-        """Create llm_logs table if not exists."""
+        """Create llm_logs table if not exists, migrating older schemas."""
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute("""
@@ -45,6 +45,8 @@ class LLMLogger:
                              error_message TEXT,
                              prompt_name TEXT,
                              prompt_version TEXT,
+                             request_type TEXT,
+                             tokens_estimated INTEGER,
                              created_at TIMESTAMP NOT NULL
                          )
                          """)
@@ -52,9 +54,22 @@ class LLMLogger:
                          CREATE INDEX IF NOT EXISTS idx_llm_logs_created_at
                              ON llm_logs(created_at)
                          """)
+            self._migrate_columns(conn)
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _migrate_columns(conn: sqlite3.Connection) -> None:
+        """Add columns introduced after the initial schema (no-op when present)."""
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(llm_logs)")}
+        migrations = {
+            "request_type": "TEXT",
+            "tokens_estimated": "INTEGER",
+        }
+        for column, declaration in migrations.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE llm_logs ADD COLUMN {column} {declaration}")
 
     def log(
         self,
@@ -71,6 +86,8 @@ class LLMLogger:
         error_message: str | None = None,
         prompt_name: str | None = None,
         prompt_version: str | None = None,
+        request_type: str = "chat",
+        tokens_estimated: bool = False,
     ) -> None:
         """
         Log an LLM call.
@@ -89,6 +106,9 @@ class LLMLogger:
             error_message: Error message (if error).
             prompt_name: Prompt template name (optional).
             prompt_version: Prompt version (optional).
+            request_type: "chat" or "structured_chat" (for cost-per-workload queries).
+            tokens_estimated: True when token counts are length-based estimates,
+                not metered usage.
         """
         log_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
@@ -100,8 +120,9 @@ class LLMLogger:
                 INSERT INTO llm_logs (log_id, provider, model, prompt, response,
                                       tokens_in, tokens_out, latency_ms, cost_usd,
                                       status, error_type, error_message,
-                                      prompt_name, prompt_version, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      prompt_name, prompt_version,
+                                      request_type, tokens_estimated, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     log_id,
@@ -118,6 +139,8 @@ class LLMLogger:
                     error_message,
                     prompt_name,
                     prompt_version,
+                    request_type,
+                    int(tokens_estimated),
                     created_at,
                 ),
             )
