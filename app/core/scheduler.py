@@ -129,7 +129,15 @@ class Scheduler:
         job_id: str,
         current_time: time,
     ) -> Any:
-        """Execute a registered job when its scheduled time is reached."""
+        """Execute a registered job when its scheduled time is reached.
+
+        This is the execution API for EXTERNAL scheduling systems (E1/D2):
+        a cron runner or dedicated entrypoint calls it per job. The
+        in-process loop (``run_application``) does not use it — that loop
+        goes through ``get_due_jobs`` + ``run_scheduled_cycle`` in
+        application.py, which isolate per-job failures instead of
+        propagating them.
+        """
         self._ensure_ready()
 
         job = self.get_job(job_id)
