@@ -8,6 +8,11 @@ class TokenBucket:
     """
     Thread-safe Token Bucket rate limiter.
 
+    ``wait_and_acquire`` polls with blocking ``time.sleep`` — safe for sync
+    callers and for async callers that run through ``asyncio.to_thread`` (as
+    ContentAnalyzer does). Calling it directly inside an event loop would
+    block the loop; if that becomes a need, add an async variant first.
+
     Args:
         rate: Tokens added per second.
         capacity: Maximum tokens that can accumulate.
