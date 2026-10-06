@@ -126,6 +126,11 @@ class Settings(BaseSettings):
         description="File path for the processing checkpoint state.",
     )
 
+    scheduler_state_path: Path = Field(
+        default=Path("app/storage/scheduler_state.json"),
+        description="File path persisting per-job last-run dates (daily guard).",
+    )
+
     # --- Discovery Config ---
     github_discovery_enabled: bool = Field(
         default=False,
