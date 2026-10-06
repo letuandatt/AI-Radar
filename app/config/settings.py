@@ -33,7 +33,7 @@ class Settings(BaseSettings):
         description="Fallback LLM providers, tried in order when the primary fails.",
     )
     groq_model: str = Field(
-        default="qwen/qwen3.6-27b",
+        default="qwen/qwen3.8-27b",
         description="Groq model name.",
     )
     ollama_model: str = Field(
@@ -59,6 +59,38 @@ class Settings(BaseSettings):
     llm_max_concurrent: int = Field(
         default=4,
         description="Max concurrent LLM calls per analysis batch (semaphore limit).",
+    )
+    llm_batch_size: int = Field(
+        default=50,
+        description="Extraction chunk size: checkpoint and budget are revisited per chunk.",
+    )
+
+    # --- Relevance Gate (deterministic pre-LLM filter) ---
+    gate_enabled: bool = Field(
+        default=True,
+        description="Run the relevance gate between normalization and extraction.",
+    )
+    gate_min_content_length: int = Field(
+        default=50,
+        description="Minimum content length in chars (0 disables the rule).",
+    )
+    gate_max_article_age_days: float | None = Field(
+        default=None,
+        description="Reject articles older than this many days (None disables freshness).",
+    )
+    gate_topic_keywords: list[str] = Field(
+        default_factory=list,
+        description="Topic keywords requiring at least one match (empty = rule off).",
+    )
+
+    # --- LLM budget limits (pre-request enforcement) ---
+    llm_daily_token_limit: int | None = Field(
+        default=None,
+        description="Max LLM tokens per day across all workloads (None disables).",
+    )
+    llm_daily_request_limit: int | None = Field(
+        default=None,
+        description="Max LLM requests per day across all workloads (None disables).",
     )
 
     rss_sources: list[dict[str, str]] = Field(
