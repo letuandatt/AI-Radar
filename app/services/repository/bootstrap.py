@@ -125,28 +125,22 @@ def create_retrieval_service(initializer: "RepositoryInitializer"):
     )
 
 
-def create_analysis_service(initializer: RepositoryInitializer) -> ContentAnalyzer:
-    """Create ContentAnalyzer service from repository initializer.
+def create_llm_chain(settings: Settings):
+    """Create the application-wide LLM provider chain from settings.
 
-    The LLM provider chain is fully settings-driven: provider order,
-    model names, budget and alert threshold all come from Settings
-    so switching models never requires code changes.
+    ONE chain is shared by analysis and extraction so both workloads share
+    one budget, one rate limiter and one fallback policy (provider order,
+    model names, budget and alert threshold all come from Settings).
 
     Args:
-        initializer: Initialized repository with all stores ready.
+        settings: Application settings.
 
     Returns:
-        Configured ContentAnalyzer instance.
+        LLMProviderChain configured from settings.
     """
     from app.integrations.llm.factory import LLMProviderFactory
-    from app.prompts.loader import PromptLoader
-    from app.services.repository.access_service import RepositoryAccessService
 
-    settings = get_settings()
-
-    access_service = RepositoryAccessService(initializer.sqlite_store)
-
-    llm_chain = LLMProviderFactory.create(
+    return LLMProviderFactory.create(
         primary_provider=settings.llm_primary_provider,
         fallback_providers=settings.llm_fallback_providers or None,
         ollama_model=settings.ollama_model,
@@ -157,6 +151,25 @@ def create_analysis_service(initializer: RepositoryInitializer) -> ContentAnalyz
         rate_limit_rpm=settings.llm_rate_limit_rpm,
         rate_limit_wait_timeout=settings.llm_rate_limit_wait_timeout,
     )
+
+
+def create_analysis_service(initializer: RepositoryInitializer, llm_chain) -> ContentAnalyzer:
+    """Create ContentAnalyzer service from repository initializer.
+
+    Args:
+        initializer: Initialized repository with all stores ready.
+        llm_chain: Shared LLM provider chain (see create_llm_chain) —
+            injected so analysis and extraction count against one budget.
+
+    Returns:
+        Configured ContentAnalyzer instance.
+    """
+    from app.prompts.loader import PromptLoader
+    from app.services.repository.access_service import RepositoryAccessService
+
+    settings = get_settings()
+
+    access_service = RepositoryAccessService(initializer.sqlite_store)
 
     prompt_loader = PromptLoader()
 
