@@ -12,6 +12,7 @@ from app.models.enriched_article import EnrichedArticle
 from app.models.metadata import ExtractionResult
 from app.models.normalized_article import NormalizedArticle
 from app.pipelines.processing import ProcessingPipeline
+from app.services.filtering.relevance_gate import RelevanceGate
 from app.services.knowledge.object_assembler import (
     AssemblyResult,
     KnowledgeObjectAssembler,
@@ -788,3 +789,270 @@ class TestCheckpointPersistence:
         assert state is not None
         assert state.stage == "stored"
         assert state.status == "success"
+
+
+# ==============================================================================
+# Relevance Gate Wiring Tests (C1)
+# ==============================================================================
+
+
+class TestRelevanceGateWiring:
+    """C1: the gate runs between normalization and extraction."""
+
+    async def test_gate_filters_before_extraction(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        long_article = RawArticle(
+            title="Long enough",
+            url="https://example.com/long",
+            content="x" * 100,
+            published_date=datetime(2025, 1, 1),
+            source_name="test",
+        )
+        short_article = RawArticle(
+            title="Short",
+            url="https://example.com/short",
+            content="tiny",
+            published_date=datetime(2025, 1, 1),
+            source_name="test",
+        )
+
+        received: list[list[NormalizedArticle]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            received.append(list(articles))
+            return [
+                EnrichedArticle(
+                    article=a,
+                    extraction=ExtractionResult(
+                        summary="s", topics=["t"], entities=["e"], relevance_score=0.5
+                    ),
+                    extraction_status="success",
+                )
+                for a in articles
+            ]
+
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+
+        def _assemble(enriched):
+            items = [
+                PersistenceResult(
+                    url=ea.article.url,
+                    content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                    status="created",
+                )
+                for ea in enriched
+            ]
+            return AssemblyResult(
+                total_input=len(enriched),
+                built_count=len(items),
+                valid_count=len(items),
+                invalid_count=0,
+                created_count=len(items),
+                updated_count=0,
+                skipped_count=0,
+                items=items,
+            )
+
+        assembler.assemble.side_effect = _assemble
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=assembler,
+            state_service=state_service,
+            batch_extraction_stage=batch,
+            relevance_gate=RelevanceGate(min_content_length=50),
+        )
+        result = await pipeline.run_async([long_article, short_article])
+
+        # The LLM saw ONLY the kept article — never the full list
+        assert len(received) == 1
+        assert [a.url for a in received[0]] == ["https://example.com/long"]
+        assert result.filtered_objects == 1
+        assert result.objects_created == 1
+
+        # Filtered article has its own terminal checkpoint
+        short_hash = compute_content_hash(short_article.url, short_article.title)
+        state = state_service.get_status(short_hash)
+        assert state is not None
+        assert state.stage == "filtered"
+        assert state.status == "skipped"
+
+        # Re-run: both stored and filtered articles are skipped
+        result_2 = await pipeline.run_async([long_article, short_article])
+        assert result_2.skipped_objects == 2
+        assert len(received) == 1  # no second LLM call
+
+    async def test_gate_disabled_processes_everything(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_assembler: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        received: list[list[NormalizedArticle]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            received.append(list(articles))
+            return []
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=mock_assembler,
+            state_service=state_service,
+            batch_extraction_stage=batch,
+            relevance_gate=None,
+        )
+        result = await pipeline.run_async([sample_article])
+
+        assert result.filtered_objects == 0
+        assert len(received) == 1
+
+
+# ==============================================================================
+# Bounded Batch Tests (C2)
+# ==============================================================================
+
+
+class TestBoundedBatches:
+    """C2: extraction runs in bounded chunks with a checkpoint per chunk."""
+
+    @staticmethod
+    def _make_articles(count: int) -> list[RawArticle]:
+        return [
+            RawArticle(
+                title=f"Article {i}",
+                url=f"https://example.com/{i}",
+                content=f"Content {i}",
+                published_date=datetime(2025, 1, 1),
+                source_name="test",
+            )
+            for i in range(count)
+        ]
+
+    @staticmethod
+    def _success_batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+        return [
+            EnrichedArticle(
+                article=a,
+                extraction=ExtractionResult(
+                    summary="s", topics=["t"], entities=["e"], relevance_score=0.5
+                ),
+                extraction_status="success",
+            )
+            for a in articles
+        ]
+
+    @staticmethod
+    def _created_assembler() -> MagicMock:
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+
+        def _assemble(enriched):
+            items = [
+                PersistenceResult(
+                    url=ea.article.url,
+                    content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                    status="created",
+                )
+                for ea in enriched
+            ]
+            return AssemblyResult(
+                total_input=len(enriched),
+                built_count=len(items),
+                valid_count=len(items),
+                invalid_count=0,
+                created_count=len(items),
+                updated_count=0,
+                skipped_count=0,
+                items=items,
+            )
+
+        assembler.assemble.side_effect = _assemble
+        return assembler
+
+    async def test_candidates_are_extracted_in_chunks(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        chunks: list[list[str]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            chunks.append([a.url for a in articles])
+            return self._success_batch(articles)
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=self._created_assembler(),
+            state_service=state_service,
+            batch_extraction_stage=batch,
+            extraction_batch_size=2,
+        )
+        articles = self._make_articles(5)
+        result = await pipeline.run_async(articles)
+
+        # 5 articles, batch_size=2 -> 3 chunked LLM calls (2+2+1)
+        assert len(chunks) == 3
+        assert [len(c) for c in chunks] == [2, 2, 1]
+        assert result.objects_created == 5
+
+    async def test_crash_mid_run_replays_only_unstored_articles(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Crash in chunk 2 -> replay re-extracts ONLY the unfinished chunk."""
+        state_file = tmp_path / "state.json"
+        articles = self._make_articles(4)
+
+        def make_pipeline(batch):
+            storage = ProcessingStateStorage(file_path=state_file)
+            return ProcessingPipeline(
+                cleaning_stage=mock_cleaning,
+                normalization_stage=mock_normalization,
+                extraction_stage=None,
+                assembler=self._created_assembler(),
+                state_service=ProcessingStateService(storage=storage),
+                batch_extraction_stage=batch,
+                extraction_batch_size=2,
+            )
+
+        calls: list[list[str]] = []
+
+        async def crashing_batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            calls.append([a.url for a in articles])
+            if len(calls) == 2:
+                raise RuntimeError("process died mid-run")
+            return self._success_batch(articles)
+
+        with pytest.raises(RuntimeError, match="process died"):
+            await make_pipeline(crashing_batch).run_async(articles)
+
+        assert len(calls) == 2  # chunk 1 done, chunk 2 crashed
+
+        # Replay: fresh pipeline over the same state file
+        replay_calls: list[list[str]] = []
+
+        async def replay_batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            replay_calls.append([a.url for a in articles])
+            return self._success_batch(articles)
+
+        result = await make_pipeline(replay_batch).run_async(articles)
+
+        # Only the 2 unstored articles were re-extracted (chunk 1 skipped)
+        assert len(replay_calls) == 1
+        assert sorted(replay_calls[0]) == ["https://example.com/2", "https://example.com/3"]
+        assert result.objects_created == 2
+        assert result.skipped_objects == 2
