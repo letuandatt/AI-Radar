@@ -10,7 +10,7 @@ import asyncio
 
 from app.config.settings import Settings
 from app.core.logger import get_logger
-from app.integrations.ollama.ollama_client import create_ollama_chat_model
+from app.integrations.llm.provider import LLMProvider
 from app.models.article import RawArticle
 from app.models.enriched_article import EnrichedArticle
 from app.models.normalized_article import NormalizedArticle
@@ -34,16 +34,22 @@ from app.storage.processing_state import ProcessingStateStorage
 logger = get_logger(__name__)
 
 
-def build_processing_pipeline(initializer, settings: Settings) -> ProcessingPipeline:
+def build_processing_pipeline(
+    initializer,
+    settings: Settings,
+    llm_provider: LLMProvider,
+) -> ProcessingPipeline:
     """Build the processing pipeline wired to the knowledge repository.
 
     Composes the real stage implementations (cleaning, normalization,
-    async batch extraction on the configured Ollama model) and persists
-    through the repository's SQLite knowledge store.
+    async batch extraction through the SHARED LLM provider chain) and
+    persists through the repository's SQLite knowledge store.
 
     Args:
         initializer: Initialized RepositoryInitializer (needs sqlite_store).
         settings: Application settings.
+        llm_provider: Shared LLM provider chain — extraction counts against
+            the same budget and rate limiter as analysis.
 
     Returns:
         ProcessingPipeline ready to accept RawArticles.
@@ -54,9 +60,8 @@ def build_processing_pipeline(initializer, settings: Settings) -> ProcessingPipe
     norm_validator = NormalizationValidator()
     sanitizer = ContentSanitizer()
 
-    llm = create_ollama_chat_model(settings.ollama_model)
     extractor = MetadataExtractor(
-        llm=llm,
+        llm_provider=llm_provider,
         sanitizer=sanitizer,
         max_concurrent=settings.llm_max_concurrent,
     )
@@ -90,8 +95,8 @@ def build_processing_pipeline(initializer, settings: Settings) -> ProcessingPipe
         return await extractor.extract_batch(articles)
 
     logger.info(
-        "Processing pipeline built: model=%s, max_concurrent=%d",
-        settings.ollama_model,
+        "Processing pipeline built: provider=%s, max_concurrent=%d",
+        llm_provider.get_provider_name(),
         settings.llm_max_concurrent,
     )
 
