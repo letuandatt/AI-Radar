@@ -85,3 +85,35 @@ def test_configuration_multiple_validation_failures_are_reported():
         Settings(_env_file=None)
 
     assert len(exc_info.value.errors()) >= 1
+
+
+def test_acquisition_run_on_startup_defaults_to_false(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
+    monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
+    monkeypatch.setenv("ZALO_APP_ID", "test-zalo-app-id")
+    monkeypatch.setenv("ZALO_APP_SECRET", "test-zalo-app-secret")
+    monkeypatch.setenv("ZALO_ACCESS_TOKEN", "test-zalo-access-token")
+    monkeypatch.setenv("ZALO_WEBHOOK_SECRET", "test-zalo-webhook-secret")
+    monkeypatch.delenv("ACQUISITION_RUN_ON_STARTUP", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.acquisition_run_on_startup is False
+
+
+def test_acquisition_run_on_startup_can_be_enabled_via_env(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("COHERE_API_KEY", "test-cohere-key")
+    monkeypatch.setenv("QDRANT_URL", "https://qdrant.example.com")
+    monkeypatch.setenv("QDRANT_API_KEY", "test-qdrant-key")
+    monkeypatch.setenv("ZALO_APP_ID", "test-zalo-app-id")
+    monkeypatch.setenv("ZALO_APP_SECRET", "test-zalo-app-secret")
+    monkeypatch.setenv("ZALO_ACCESS_TOKEN", "test-zalo-access-token")
+    monkeypatch.setenv("ZALO_WEBHOOK_SECRET", "test-zalo-webhook-secret")
+    monkeypatch.setenv("ACQUISITION_RUN_ON_STARTUP", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.acquisition_run_on_startup is True
