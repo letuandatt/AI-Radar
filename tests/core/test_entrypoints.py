@@ -126,21 +126,92 @@ class TestSendDigestEntrypoint:
         assert exit_code == 0
         output = capsys.readouterr().out
         assert "DRY RUN OK" in output
-        assert "PENDING" in output  # D1 not implemented yet
+        assert "digest pipeline" in output
+        assert "digest_enabled" in output
 
-    def test_real_run_is_safe_noop_until_d1(self, monkeypatch):
+    def test_disabled_digest_is_noop_without_bootstrap(self, monkeypatch):
+        """digest_enabled=False (default): registered job runs as a no-op."""
         _setup_env(monkeypatch)
+        monkeypatch.delenv("DIGEST_ENABLED", raising=False)
+        _clean_settings_cache()
 
         import scripts.send_digest as entrypoint
 
         with patch(
-            "app.services.repository.bootstrap.initialize_knowledge_repository"
-        ) as mock_init:
-            mock_init.return_value.shutdown.return_value = None
+            "app.services.repository.bootstrap.initialize_knowledge_repository",
+            side_effect=AssertionError("disabled digest must not bootstrap"),
+        ):
             exit_code = entrypoint.main([])
 
-        assert exit_code == 0  # no-op until D1, never crashes the schedule
-        mock_init.assert_called_once()
+        assert exit_code == 0
+        _clean_settings_cache()
+
+    def test_enabled_digest_runs_pipeline(self, monkeypatch):
+        _setup_env(monkeypatch)
+        monkeypatch.setenv("DIGEST_ENABLED", "true")
+        _clean_settings_cache()
+
+        import scripts.send_digest as entrypoint
+
+        bootstrapped: list[str] = []
+        mock_result = MagicMock()
+        mock_result.sent = True
+        mock_result.items = [MagicMock(), MagicMock()]
+        mock_pipeline = MagicMock()
+        mock_pipeline.run.return_value = mock_result
+
+        with (
+            patch(
+                "app.services.repository.bootstrap.initialize_knowledge_repository",
+                side_effect=lambda s: (
+                    bootstrapped.append("repository") or MagicMock(sqlite_store=MagicMock())
+                ),
+            ),
+            patch(
+                "app.services.repository.bootstrap.create_llm_chain",
+                side_effect=lambda s: bootstrapped.append("llm_chain"),
+            ),
+            patch(
+                "app.pipelines.daily_digest.DailyDigestPipeline",
+                side_effect=lambda **kwargs: bootstrapped.append("digest") or mock_pipeline,
+            ),
+        ):
+            exit_code = entrypoint.main([])
+
+        assert exit_code == 0
+        # E1: digest runtime = repository + llm_chain + pipeline (no acquisition)
+        assert bootstrapped == ["repository", "llm_chain", "digest"]
+        _clean_settings_cache()
+
+    def test_failed_delivery_exits_nonzero(self, monkeypatch):
+        _setup_env(monkeypatch)
+        monkeypatch.setenv("DIGEST_ENABLED", "true")
+        _clean_settings_cache()
+
+        import scripts.send_digest as entrypoint
+
+        mock_result = MagicMock()
+        mock_result.sent = False
+        mock_result.error = "Zalo API down"
+        mock_result.items = [MagicMock()]
+        mock_pipeline = MagicMock()
+        mock_pipeline.run.return_value = mock_result
+
+        with (
+            patch(
+                "app.services.repository.bootstrap.initialize_knowledge_repository",
+                return_value=MagicMock(sqlite_store=MagicMock()),
+            ),
+            patch("app.services.repository.bootstrap.create_llm_chain", return_value=MagicMock()),
+            patch(
+                "app.pipelines.daily_digest.DailyDigestPipeline",
+                return_value=mock_pipeline,
+            ),
+        ):
+            exit_code = entrypoint.main([])
+
+        assert exit_code == 1  # delivery failure surfaced to the schedule
+        _clean_settings_cache()
 
 
 class TestGitHubWorkflows:
