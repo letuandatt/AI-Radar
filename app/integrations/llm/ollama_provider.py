@@ -113,6 +113,12 @@ class OllamaProvider:
                 )
             raise
 
+    @retry_on_transient_error(
+        max_retries=3,
+        base_delay=0.5,
+        max_delay=30.0,
+        exceptions=(TransientLLMError,),
+    )
     def structured_chat(self, prompt: str, schema: type[T]) -> T:
         if not self._circuit_breaker.allow_request():
             raise CircuitBreakerOpenError(f"Ollama circuit breaker is open for {self._model_name}")

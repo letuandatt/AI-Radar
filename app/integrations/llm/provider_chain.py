@@ -145,6 +145,11 @@ class LLMProviderChain:
         """Get provider name of primary provider."""
         return self._providers[0].get_provider_name()
 
+    @property
+    def cost_tracker(self) -> "CostTracker | None":
+        """The shared CostTracker (P1.9: entrypoints snapshot it per run)."""
+        return self._cost_tracker
+
     def estimate_cost(self, prompt: str) -> float:
         """Estimate from the primary provider (chain-as-provider view)."""
         return self._providers[0].estimate_cost(prompt)
