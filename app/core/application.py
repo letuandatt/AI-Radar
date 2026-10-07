@@ -170,6 +170,7 @@ def _init_acquisition() -> DefaultAcquisitionPipeline:
         rss_registry=get_source_registry(),
         github_registry=get_github_registry(),
         hf_registry=get_hf_registry(),
+        settings=settings,
     )
 
     # Inject ApplicationService if available

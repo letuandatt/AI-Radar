@@ -8,6 +8,7 @@ HuggingFace), handling errors gracefully, and aggregating results.
 import time
 from datetime import datetime
 
+from app.config.settings import Settings
 from app.core.logger import get_logger
 from app.fetchers.github import GitHubFetcher
 from app.fetchers.github_parser import GitHubParser
@@ -46,6 +47,7 @@ class DefaultAcquisitionPipeline:
         rss_registry: ConfigBasedSourceRegistry,
         github_registry: ConfigBasedGitHubRegistry,
         hf_registry: ConfigBasedHFRegistry,
+        settings: Settings | None = None,
     ) -> None:
         """Initialize the pipeline with the required registries.
 
@@ -53,10 +55,14 @@ class DefaultAcquisitionPipeline:
             rss_registry: Registry containing RSS sources.
             github_registry: Registry containing GitHub sources.
             hf_registry: Registry containing HuggingFace sources.
+            settings: Optional settings enabling source discovery
+                (github_discovery_enabled / hf_discovery_enabled, both
+                default False). None disables discovery.
         """
         self._rss_registry = rss_registry
         self._github_registry = github_registry
         self._hf_registry = hf_registry
+        self._settings = settings
 
         self._app_service = None
 
@@ -170,6 +176,29 @@ class DefaultAcquisitionPipeline:
                 )
                 errors.append(error)
                 logger.error("Failed to process HuggingFace source %s: %s", hf_source.name, e)
+
+        # Discovery sources (settings-driven, best-effort — C-extension of C1)
+        if self._settings is not None and (
+            self._settings.github_discovery_enabled or self._settings.hf_discovery_enabled
+        ):
+            try:
+                from app.fetchers.discovery import (
+                    fetch_github_discovery,
+                    fetch_huggingface_discovery,
+                )
+
+                gh_discovered = fetch_github_discovery(self._settings)
+                collected_articles.extend(gh_discovered)
+                total_articles += len(gh_discovered)
+                logger.info("GitHub discovery: %d articles", len(gh_discovered))
+
+                hf_discovered = fetch_huggingface_discovery(self._settings)
+                collected_articles.extend(hf_discovered)
+                total_articles += len(hf_discovered)
+                logger.info("HuggingFace discovery: %d articles", len(hf_discovered))
+            except Exception as e:
+                # Discovery must never break the main acquisition run
+                logger.error("Discovery fetch failed: %s", e)
 
         execution_time = time.time() - start_time
 
