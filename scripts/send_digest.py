@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    from app.core.run_metrics import RunMetrics
     from app.pipelines.daily_digest import DailyDigestPipeline, LogChannel
     from app.services.repository.bootstrap import (
         create_llm_chain,
@@ -73,6 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     initializer = initialize_knowledge_repository(settings)
     llm_chain = create_llm_chain(settings)
 
+    # P1.9: one metrics line per run
+    run = RunMetrics.start("digest")
+    cost_before = llm_chain.cost_tracker.snapshot() if llm_chain.cost_tracker else None
+
     pipeline = DailyDigestPipeline(
         sqlite_store=initializer.sqlite_store,
         llm_provider=llm_chain,
@@ -81,7 +86,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     result = pipeline.run()
 
+    run.set(
+        digest_target_date=result.target_date.isoformat(),
+        digest_items=len(result.items),
+        digest_sent=result.sent,
+        digest_channel=result.channel,
+    )
+    if llm_chain.cost_tracker and cost_before is not None:
+        cost_after = llm_chain.cost_tracker.snapshot()
+        run.set(
+            llm_calls=cost_after["requests_today"] - cost_before["requests_today"],
+            llm_tokens=cost_after["tokens_today"] - cost_before["tokens_today"],
+            llm_cost_usd=round(cost_after["current_cost"] - cost_before["current_cost"], 6),
+        )
+
     initializer.shutdown()
+    run.finish()
+    run.save_jsonl(settings.run_metrics_path)
 
     if result.sent:
         logger.info(

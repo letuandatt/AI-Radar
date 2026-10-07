@@ -59,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # --- Real run: batch dependencies only (E1) ---
+    from app.core.run_metrics import RunMetrics
     from app.fetchers.registry import (
         get_github_registry,
         get_hf_registry,
@@ -90,6 +91,11 @@ def main(argv: list[str] | None = None) -> int:
         settings=settings,
     )
 
+    # P1.9: one metrics line per run
+    run = RunMetrics.start("knowledge_update")
+    run_metrics: dict = {}
+    cost_before = llm_chain.cost_tracker.snapshot() if llm_chain.cost_tracker else None
+
     acquisition_result = acquisition.run()
     logger.info(
         "Acquisition finished: %d sources (%d ok, %d failed), %d articles",
@@ -98,9 +104,25 @@ def main(argv: list[str] | None = None) -> int:
         acquisition_result.failed_sources,
         acquisition_result.total_articles,
     )
+    run.set(
+        articles_fetched=acquisition_result.total_articles,
+        sources_total=acquisition_result.total_sources,
+        sources_ok=acquisition_result.successful_sources,
+        sources_failed=acquisition_result.failed_sources,
+    )
 
-    processing_result = run_knowledge_update(acquisition_result, processing)
+    processing_result = run_knowledge_update(acquisition_result, processing, metrics=run_metrics)
+    run.set(**run_metrics)
     if processing_result is not None:
+        run.set(
+            articles_total_input=processing_result.total_input,
+            articles_extracted=processing_result.extracted,
+            objects_created=processing_result.objects_created,
+            objects_updated=processing_result.objects_updated,
+            objects_failed=processing_result.failed_objects,
+            objects_skipped=processing_result.skipped_objects,
+            objects_filtered=processing_result.filtered_objects,
+        )
         logger.info(
             "Processing finished: created=%d updated=%d failed=%d filtered=%d",
             processing_result.objects_created,
@@ -111,10 +133,21 @@ def main(argv: list[str] | None = None) -> int:
 
     analysis_service = create_analysis_service(initializer, llm_chain)
     analysis_results = asyncio.run(analysis_service.analyze_batch())
+    run.set(analyzed_items=len(analysis_results))
     logger.info("Analysis finished: %d items analyzed", len(analysis_results))
 
+    if llm_chain.cost_tracker and cost_before is not None:
+        cost_after = llm_chain.cost_tracker.snapshot()
+        run.set(
+            llm_calls=cost_after["requests_today"] - cost_before["requests_today"],
+            llm_tokens=cost_after["tokens_today"] - cost_before["tokens_today"],
+            llm_cost_usd=round(cost_after["current_cost"] - cost_before["current_cost"], 6),
+        )
+
     initializer.shutdown()
-    logger.info("Knowledge update cycle complete")
+    run.finish()
+    run.save_jsonl(settings.run_metrics_path)
+    logger.info("Knowledge update cycle complete (run_id=%s)", run.run_id)
     return 0
 
 
