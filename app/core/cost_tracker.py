@@ -174,6 +174,16 @@ class CostTracker:
             self._check_reset()
             return self.current_cost
 
+    def snapshot(self) -> dict[str, float | int]:
+        """Point-in-time usage counters (P1.9: per-run deltas via before/after)."""
+        with self.lock:
+            self._check_reset()
+            return {
+                "requests_today": self.requests_today,
+                "tokens_today": self.tokens_today,
+                "current_cost": round(self.current_cost, 6),
+            }
+
     def get_remaining_budget(self) -> float:
         """Get remaining daily budget."""
         with self.lock:
