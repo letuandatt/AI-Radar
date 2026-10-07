@@ -103,6 +103,12 @@ class Settings(BaseSettings):
         description="Max ranked insights included in one digest.",
     )
 
+    # --- Run metrics (P1.9) ---
+    run_metrics_path: Path = Field(
+        default=Path("app/storage/metrics/run_metrics.jsonl"),
+        description="JSONL file receiving one metrics line per batch run.",
+    )
+
     # --- Storage paths (E2) ---
     sqlite_path: Path = Field(
         default=Path("app/storage/knowledge/knowledge.db"),

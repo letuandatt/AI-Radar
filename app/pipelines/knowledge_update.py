@@ -132,6 +132,7 @@ def deduplicate_articles(articles: list[RawArticle]) -> list[RawArticle]:
 def run_knowledge_update(
     acquisition_result: AcquisitionResult,
     processing_pipeline: ProcessingPipeline,
+    metrics: dict | None = None,
 ) -> ProcessingResult | None:
     """Forward acquired articles into the processing pipeline (A1).
 
@@ -141,11 +142,14 @@ def run_knowledge_update(
     Args:
         acquisition_result: Result of the acquisition run (carries articles).
         processing_pipeline: The wired processing pipeline.
+        metrics: Optional dict receiving run fields (articles_after_dedup).
 
     Returns:
         ProcessingResult of the processing run, None when nothing to process.
     """
     articles = deduplicate_articles(acquisition_result.articles)
+    if metrics is not None:
+        metrics["articles_after_dedup"] = len(articles)
     if not articles:
         logger.info("No articles acquired; skipping processing")
         return None
