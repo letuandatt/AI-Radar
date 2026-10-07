@@ -4,8 +4,6 @@ This module bridges the application settings and the RepositoryInitializer,
 keeping database-specific configuration details out of the application core.
 """
 
-from pathlib import Path
-
 from app.config.settings import Settings, get_settings
 from app.core.logger import get_logger
 from app.services.analysis.content_analyzer import ContentAnalyzer
@@ -13,6 +11,29 @@ from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
 
 logger = get_logger(__name__)
+
+
+def build_repository_config(settings: Settings) -> RepositoryConfig:
+    """Build the RepositoryConfig fully from application settings (E2/E3).
+
+    Storage paths and embedding provider are settings-driven so deployment
+    never depends on paths inside the source tree.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        RepositoryConfig for RepositoryInitializer.
+    """
+    return RepositoryConfig(
+        sqlite_path=settings.sqlite_path,
+        qdrant_url=settings.qdrant_url,
+        qdrant_collection="knowledge_objects",
+        bm25_index_path=settings.bm25_index_path,
+        embedding_provider_type=settings.embedding_provider,
+        ollama_base_url=settings.ollama_base_url,
+        cohere_api_key=settings.cohere_api_key or None,
+    )
 
 
 def initialize_knowledge_repository(settings: Settings) -> RepositoryInitializer:
@@ -24,15 +45,7 @@ def initialize_knowledge_repository(settings: Settings) -> RepositoryInitializer
     Returns:
         Initialized RepositoryInitializer instance.
     """
-    config = RepositoryConfig(
-        sqlite_path=Path("app/storage/knowledge/knowledge.db"),
-        qdrant_url=settings.qdrant_url,
-        qdrant_collection="knowledge_objects",
-        bm25_index_path=Path("app/storage/search/bm25_index.pkl"),
-        embedding_provider_type="ollama",
-        ollama_base_url="http://localhost:11434",
-        cohere_api_key=settings.cohere_api_key or None,
-    )
+    config = build_repository_config(settings)
 
     initializer = RepositoryInitializer(config)
 
