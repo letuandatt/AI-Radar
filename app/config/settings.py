@@ -93,6 +93,16 @@ class Settings(BaseSettings):
         description="Max LLM requests per day across all workloads (None disables).",
     )
 
+    # --- Digest (D1) ---
+    digest_enabled: bool = Field(
+        default=False,
+        description="Deliver the daily digest (False keeps the scheduled job as a no-op).",
+    )
+    digest_max_items: int = Field(
+        default=10,
+        description="Max ranked insights included in one digest.",
+    )
+
     # --- Storage paths (E2) ---
     sqlite_path: Path = Field(
         default=Path("app/storage/knowledge/knowledge.db"),
