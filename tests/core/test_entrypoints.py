@@ -1,5 +1,6 @@
 """Tests for the D2 batch entrypoints and E1 bootstrap boundaries."""
 
+from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,11 +24,15 @@ def _clean_settings_cache():
     get_settings.cache_clear()
 
 
-def _setup_env(monkeypatch):
+def _setup_env(monkeypatch, tmp_path: Path | None = None):
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("SQLITE_PATH", raising=False)
     monkeypatch.delenv("BM25_INDEX_PATH", raising=False)
+    if tmp_path is not None:
+        monkeypatch.setenv("RUN_METRICS_PATH", str(tmp_path / "metrics" / "runs.jsonl"))
+    else:
+        monkeypatch.delenv("RUN_METRICS_PATH", raising=False)
     _clean_settings_cache()
 
 
@@ -56,9 +61,9 @@ class TestUpdateKnowledgeEntrypoint:
         assert "repository" in output
         assert "llm_chain" in output
 
-    def test_real_run_bootstraps_batch_dependencies_only(self, monkeypatch):
+    def test_real_run_bootstraps_batch_dependencies_only(self, monkeypatch, tmp_path: Path):
         """E1: batch runtime inits repository+llm_chain+pipelines, NOT retrieval."""
-        _setup_env(monkeypatch)
+        _setup_env(monkeypatch, tmp_path)
 
         import scripts.update_knowledge as entrypoint
 
@@ -70,11 +75,24 @@ class TestUpdateKnowledgeEntrypoint:
             initializer.sqlite_store = MagicMock()
             return initializer
 
+        def _fake_chain(settings):
+            bootstrapped.append("llm_chain")
+            chain = MagicMock()
+            chain.cost_tracker = None
+            return chain
+
         def _fake_analysis(initializer, chain):
             bootstrapped.append("analysis")
             analyzer = MagicMock()
             analyzer.analyze_batch = AsyncMock(return_value=[])
             return analyzer
+
+        def _fake_processing(acquisition_result, pipeline, metrics=None):
+            if metrics is not None:
+                metrics["articles_after_dedup"] = 0
+            from app.models.processing_result import ProcessingResult
+
+            return ProcessingResult(total_input=0, processing_duration=0.0)
 
         with (
             patch(
@@ -82,8 +100,12 @@ class TestUpdateKnowledgeEntrypoint:
                 side_effect=_fake_init,
             ),
             patch(
+                "app.pipelines.knowledge_update.run_knowledge_update",
+                side_effect=_fake_processing,
+            ),
+            patch(
                 "app.services.repository.bootstrap.create_llm_chain",
-                side_effect=lambda s: bootstrapped.append("llm_chain"),
+                side_effect=_fake_chain,
             ),
             patch(
                 "app.pipelines.knowledge_update.build_processing_pipeline",
@@ -101,14 +123,38 @@ class TestUpdateKnowledgeEntrypoint:
                 side_effect=_fake_analysis,
             ),
         ):
+            processing_result = MagicMock()
+            processing_result.total_input = 0
+            processing_result.extracted = 0
+            processing_result.objects_created = 0
+            processing_result.objects_updated = 0
+            processing_result.failed_objects = 0
+            processing_result.skipped_objects = 0
+            processing_result.filtered_objects = 0
             mock_pipeline = mock_acq.return_value
-            mock_pipeline.run.return_value.total_articles = 0
+            mock_run_result = mock_pipeline.run.return_value
+            mock_run_result.total_articles = 0
+            mock_run_result.total_sources = 1
+            mock_run_result.successful_sources = 1
+            mock_run_result.failed_sources = 0
 
             exit_code = entrypoint.main([])
 
         assert exit_code == 0
         # E1: exactly the batch dependencies — no retrieval, no scheduler, no web
         assert bootstrapped == ["repository", "llm_chain", "processing", "analysis"]
+
+        # P1.9: one metrics line recorded for the run
+        import json
+
+        metrics_file = tmp_path / "metrics" / "runs.jsonl"
+        assert metrics_file.exists()
+        lines = [json.loads(line) for line in metrics_file.read_text(encoding="utf-8").splitlines()]
+        assert len(lines) == 1
+        assert lines[0]["kind"] == "knowledge_update"
+        assert lines[0]["run_id"]
+        assert "articles_fetched" in lines[0]["metrics"]
+        assert "articles_after_dedup" in lines[0]["metrics"]
 
 
 class TestSendDigestEntrypoint:
@@ -146,16 +192,26 @@ class TestSendDigestEntrypoint:
         assert exit_code == 0
         _clean_settings_cache()
 
-    def test_enabled_digest_runs_pipeline(self, monkeypatch):
-        _setup_env(monkeypatch)
+    def test_enabled_digest_runs_pipeline(self, monkeypatch, tmp_path: Path):
+        _setup_env(monkeypatch, tmp_path)
         monkeypatch.setenv("DIGEST_ENABLED", "true")
         _clean_settings_cache()
 
         import scripts.send_digest as entrypoint
 
         bootstrapped: list[str] = []
+
+        def _fake_chain(settings):
+            bootstrapped.append("llm_chain")
+            chain = MagicMock()
+            chain.cost_tracker = None
+            return chain
+
         mock_result = MagicMock()
+        mock_result.target_date = date(2026, 10, 6)
         mock_result.sent = True
+        mock_result.channel = "log"
+        mock_result.error = None
         mock_result.items = [MagicMock(), MagicMock()]
         mock_pipeline = MagicMock()
         mock_pipeline.run.return_value = mock_result
@@ -169,7 +225,7 @@ class TestSendDigestEntrypoint:
             ),
             patch(
                 "app.services.repository.bootstrap.create_llm_chain",
-                side_effect=lambda s: bootstrapped.append("llm_chain"),
+                side_effect=_fake_chain,
             ),
             patch(
                 "app.pipelines.daily_digest.DailyDigestPipeline",
@@ -183,6 +239,15 @@ class TestSendDigestEntrypoint:
         assert bootstrapped == ["repository", "llm_chain", "digest"]
         _clean_settings_cache()
 
+        # P1.9: one metrics line recorded for the run
+        import json
+
+        metrics_file = tmp_path / "metrics" / "runs.jsonl"
+        lines = [json.loads(line) for line in metrics_file.read_text(encoding="utf-8").splitlines()]
+        assert len(lines) == 1
+        assert lines[0]["kind"] == "digest"
+        assert lines[0]["metrics"]["digest_sent"] is True
+
     def test_failed_delivery_exits_nonzero(self, monkeypatch):
         _setup_env(monkeypatch)
         monkeypatch.setenv("DIGEST_ENABLED", "true")
@@ -191,7 +256,9 @@ class TestSendDigestEntrypoint:
         import scripts.send_digest as entrypoint
 
         mock_result = MagicMock()
+        mock_result.target_date = date(2026, 10, 6)
         mock_result.sent = False
+        mock_result.channel = "log"
         mock_result.error = "Zalo API down"
         mock_result.items = [MagicMock()]
         mock_pipeline = MagicMock()
@@ -202,7 +269,10 @@ class TestSendDigestEntrypoint:
                 "app.services.repository.bootstrap.initialize_knowledge_repository",
                 return_value=MagicMock(sqlite_store=MagicMock()),
             ),
-            patch("app.services.repository.bootstrap.create_llm_chain", return_value=MagicMock()),
+            patch(
+                "app.services.repository.bootstrap.create_llm_chain",
+                return_value=MagicMock(cost_tracker=None),
+            ),
             patch(
                 "app.pipelines.daily_digest.DailyDigestPipeline",
                 return_value=mock_pipeline,
