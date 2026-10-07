@@ -93,6 +93,26 @@ class Settings(BaseSettings):
         description="Max LLM requests per day across all workloads (None disables).",
     )
 
+    # --- Storage paths (E2) ---
+    sqlite_path: Path = Field(
+        default=Path("app/storage/knowledge/knowledge.db"),
+        description="SQLite knowledge database file path.",
+    )
+    bm25_index_path: Path = Field(
+        default=Path("app/storage/search/bm25_index.pkl"),
+        description="BM25 index pickle file path (rebuilt from SQLite when missing).",
+    )
+
+    # --- Embedding (E3) ---
+    embedding_provider: str = Field(
+        default="ollama",
+        description="Embedding provider ('ollama' or 'cohere').",
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Ollama server base URL (used by LLM and embedding providers).",
+    )
+
     rss_sources: list[dict[str, str]] = Field(
         default_factory=list,
         description="List of RSS sources. Each item must be a dict with 'name' and 'url' keys.",
