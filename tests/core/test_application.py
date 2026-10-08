@@ -12,6 +12,28 @@ from app.core.application import (
 from app.core.lifecycle import ApplicationLifecycle, ApplicationState
 
 
+@pytest.fixture(autouse=True)
+def isolate_external_components(monkeypatch):
+    """Exercise the real registry without opening service clients or reading secrets."""
+    from app.core import application
+
+    for name in (
+        "repository",
+        "retrieval",
+        "app_service",
+        "llm_chain",
+        "analysis",
+        "processing",
+        "acquisition",
+    ):
+        monkeypatch.setattr(application, f"_init_{name}", MagicMock())
+        monkeypatch.setattr(application, f"_shutdown_{name}", MagicMock())
+    monkeypatch.setattr(application, "_registry", None)
+    yield
+    if application._registry is not None:
+        application._registry.shutdown_all()
+
+
 @patch("app.core.application._shutdown_storage")
 @patch("app.core.application._init_storage")
 @patch("app.core.application._shutdown_scheduler")

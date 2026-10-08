@@ -5,7 +5,7 @@ This file contains ALL Groq-specific parameters. To adjust model settings
 Do NOT dig into LangChain source code.
 
 Provider: Groq (via langchain-groq)
-Fallback Model: qwen/qwen3.6-27b
+Fallback Model: qwen/qwen3.8-27b
 """
 
 from langchain_groq import ChatGroq
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 # ============================================================================
 # GROQ MODEL PARAMETERS — Edit here to adjust behavior
 # ============================================================================
-GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_MODEL = "qwen/qwen3.8-27b"
 GROQ_TEMPERATURE = 0.1  # Low = deterministic extraction
 GROQ_MAX_TOKENS = 1024  # summary + topics + entities + score
 GROQ_MAX_RETRIES = 0
@@ -27,25 +27,26 @@ GROQ_MAX_RETRIES = 0
 # ============================================================================
 
 
-def create_groq_chat_model(api_key: SecretStr) -> ChatGroq:
+def create_groq_chat_model(api_key: SecretStr, model: str = GROQ_MODEL) -> ChatGroq:
     """Create a configured ChatGroq instance.
 
     Args:
         api_key: Groq API key (from settings/env).
+        model: Groq model name (defaults to GROQ_MODEL constant).
 
     Returns:
         Configured ChatGroq instance ready for use.
     """
     logger.info(
-        "Creating Groq chat model: %s (temp=%.1f, max_tokens=%d)",
-        GROQ_MODEL,
+        "Creating Groq chat model: %s (temp=%.1f, max_tokens=%d, retries=%d)",
+        model,
         GROQ_TEMPERATURE,
         GROQ_MAX_TOKENS,
         GROQ_MAX_RETRIES,
     )
 
     return ChatGroq(
-        model=GROQ_MODEL,
+        model=model,
         api_key=api_key,
         temperature=GROQ_TEMPERATURE,
         max_tokens=GROQ_MAX_TOKENS,

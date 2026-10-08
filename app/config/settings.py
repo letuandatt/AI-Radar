@@ -1,5 +1,6 @@
 from datetime import time
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,7 +14,6 @@ class Settings(BaseSettings):
 
     groq_api_key: SecretStr
     cohere_api_key: str
-    openrouter_api_key: str
 
     qdrant_url: str
     qdrant_api_key: str
@@ -23,7 +23,111 @@ class Settings(BaseSettings):
     zalo_access_token: str
     zalo_webhook_secret: str
 
-    llm_provider: str = Field(default="gemini", description="LLM provider to use.")
+    # --- LLM Config ---
+    llm_primary_provider: str = Field(
+        default="ollama",
+        description="Primary LLM provider ('ollama' or 'groq').",
+    )
+    llm_fallback_providers: list[str] = Field(
+        default_factory=list,
+        description="Fallback LLM providers, tried in order when the primary fails.",
+    )
+    groq_model: str = Field(
+        default="qwen/qwen3.8-27b",
+        description="Groq model name.",
+    )
+    ollama_model: str = Field(
+        default="qwen3:4b",
+        description="Ollama model name.",
+    )
+    llm_daily_budget_usd: float = Field(
+        default=10.0,
+        description="Daily LLM spending budget in USD.",
+    )
+    llm_alert_percent: float = Field(
+        default=0.8,
+        description="Budget alert threshold as a fraction of the daily budget (0.0-1.0).",
+    )
+    llm_rate_limit_rpm: float = Field(
+        default=60.0,
+        description="Chain-level rate limit in requests per minute (0 disables).",
+    )
+    llm_rate_limit_wait_timeout: float = Field(
+        default=30.0,
+        description="Max seconds to wait for a rate limiter token before failing a call.",
+    )
+    llm_max_concurrent: int = Field(
+        default=4,
+        description="Max concurrent LLM calls per analysis batch (semaphore limit).",
+    )
+    llm_batch_size: int = Field(
+        default=50,
+        description="Extraction chunk size: checkpoint and budget are revisited per chunk.",
+    )
+
+    # --- Relevance Gate (deterministic pre-LLM filter) ---
+    gate_enabled: bool = Field(
+        default=True,
+        description="Run the relevance gate between normalization and extraction.",
+    )
+    gate_min_content_length: int = Field(
+        default=50,
+        description="Minimum content length in chars (0 disables the rule).",
+    )
+    gate_max_article_age_days: float | None = Field(
+        default=None,
+        description="Reject articles older than this many days (None disables freshness).",
+    )
+    gate_topic_keywords: list[str] = Field(
+        default_factory=list,
+        description="Topic keywords requiring at least one match (empty = rule off).",
+    )
+
+    # --- LLM budget limits (pre-request enforcement) ---
+    llm_daily_token_limit: int | None = Field(
+        default=None,
+        description="Max LLM tokens per day across all workloads (None disables).",
+    )
+    llm_daily_request_limit: int | None = Field(
+        default=None,
+        description="Max LLM requests per day across all workloads (None disables).",
+    )
+
+    # --- Digest (D1) ---
+    digest_enabled: bool = Field(
+        default=False,
+        description="Deliver the daily digest (False keeps the scheduled job as a no-op).",
+    )
+    digest_max_items: int = Field(
+        default=10,
+        description="Max ranked insights included in one digest.",
+    )
+
+    # --- Run metrics (P1.9) ---
+    run_metrics_path: Path = Field(
+        default=Path("app/storage/metrics/run_metrics.jsonl"),
+        description="JSONL file receiving one metrics line per batch run.",
+    )
+
+    # --- Storage paths (E2) ---
+    sqlite_path: Path = Field(
+        default=Path("app/storage/knowledge/knowledge.db"),
+        description="SQLite knowledge database file path.",
+    )
+    bm25_index_path: Path = Field(
+        default=Path("app/storage/search/bm25_index.pkl"),
+        description="BM25 index pickle file path (rebuilt from SQLite when missing).",
+    )
+
+    # --- Embedding (E3) ---
+    embedding_provider: str = Field(
+        default="ollama",
+        description="Embedding provider ('ollama' or 'cohere').",
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        description="Ollama server base URL (used by LLM and embedding providers).",
+    )
 
     rss_sources: list[dict[str, str]] = Field(
         default_factory=list,
@@ -74,8 +178,25 @@ class Settings(BaseSettings):
     )
 
     acquisition_run_on_startup: bool = Field(
+        default=False,
+        description="Run acquisition pipeline immediately on application startup (dev only). "
+        "Startup only initializes infrastructure; ingestion is triggered by the scheduled job.",
+    )
+
+    knowledge_update_enabled: bool = Field(
         default=True,
-        description="Whether to run acquisition pipeline immediately on application startup.",
+        description="Chain the processing pipeline onto the acquisition job "
+        "(acquisition → processing → repository).",
+    )
+
+    processing_state_path: Path = Field(
+        default=Path("app/storage/processing_state.json"),
+        description="File path for the processing checkpoint state.",
+    )
+
+    scheduler_state_path: Path = Field(
+        default=Path("app/storage/scheduler_state.json"),
+        description="File path persisting per-job last-run dates (daily guard).",
     )
 
     # --- Discovery Config ---

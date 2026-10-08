@@ -184,11 +184,11 @@ class FusionRetriever:
             vector_info[kid] = (result.score, rank, result.payload)
 
         # Process BM25 results
-        for rank, result in enumerate(bm25_results, start=1):  # type: ignore[assignment]
-            kid = result.doc_id  # type: ignore[attr-defined]
+        for rank, bm25_result in enumerate(bm25_results, start=1):
+            kid = bm25_result.doc_id
             rrf_contribution = 1.0 / (k + rank)
             fused_scores[kid] = fused_scores.get(kid, 0.0) + rrf_contribution
-            bm25_info[kid] = (result.score, rank)
+            bm25_info[kid] = (bm25_result.score, rank)
 
         # Build FusedResult list
         results: list[FusedResult] = []

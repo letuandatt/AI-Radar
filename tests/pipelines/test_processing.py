@@ -12,9 +12,11 @@ from app.models.enriched_article import EnrichedArticle
 from app.models.metadata import ExtractionResult
 from app.models.normalized_article import NormalizedArticle
 from app.pipelines.processing import ProcessingPipeline
+from app.services.filtering.relevance_gate import RelevanceGate
 from app.services.knowledge.object_assembler import (
     AssemblyResult,
     KnowledgeObjectAssembler,
+    PersistenceResult,
 )
 from app.services.processing_state_service import ProcessingStateService
 from app.storage.processing_state import ProcessingStateStorage
@@ -29,17 +31,34 @@ def state_service(tmp_path: Path) -> ProcessingStateService:
 
 @pytest.fixture
 def mock_assembler() -> MagicMock:
-    """Provide a mocked KnowledgeObjectAssembler."""
+    """Provide a mocked KnowledgeObjectAssembler returning item-level results.
+
+    Every enriched article is reported as "created" so the honest-checkpoint
+    marking behaves like a fully successful assembly.
+    """
     assembler = MagicMock(spec=KnowledgeObjectAssembler)
-    assembler.assemble.return_value = AssemblyResult(
-        total_input=1,
-        built_count=1,
-        valid_count=1,
-        invalid_count=0,
-        created_count=1,
-        updated_count=0,
-        skipped_count=0,
-    )
+
+    def _assemble(enriched_articles: list[EnrichedArticle]) -> AssemblyResult:
+        items = [
+            PersistenceResult(
+                url=ea.article.url,
+                content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                status="created",
+            )
+            for ea in enriched_articles
+        ]
+        return AssemblyResult(
+            total_input=len(enriched_articles),
+            built_count=len(items),
+            valid_count=len(items),
+            invalid_count=0,
+            created_count=len(items),
+            updated_count=0,
+            skipped_count=0,
+            items=items,
+        )
+
+    assembler.assemble.side_effect = _assemble
     return assembler
 
 
@@ -329,3 +348,711 @@ class TestReplay:
 
         assert result.total_input == 0
         assert result.processing_duration == 0.0
+
+
+# ==============================================================================
+# Honest Checkpoint Tests (Wiring & Fix Plan A4)
+# ==============================================================================
+
+
+class TestHonestCheckpoint:
+    """Checkpoint "stored" must reflect real persistence, item by item."""
+
+    @staticmethod
+    def _assembly_with_statuses(
+        enriched_articles: list[EnrichedArticle],
+        statuses: list[str],
+    ) -> AssemblyResult:
+        items = [
+            PersistenceResult(
+                url=ea.article.url,
+                content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                status=status,
+                error="db locked" if status == "failed" else None,
+            )
+            for ea, status in zip(enriched_articles, statuses)
+        ]
+        return AssemblyResult(
+            total_input=len(enriched_articles),
+            built_count=sum(1 for s in statuses if s != "failed"),
+            valid_count=sum(1 for s in statuses if s in ("created", "updated", "skipped")),
+            invalid_count=sum(1 for s in statuses if s == "failed"),
+            created_count=sum(1 for s in statuses if s == "created"),
+            updated_count=sum(1 for s in statuses if s == "updated"),
+            skipped_count=sum(1 for s in statuses if s == "skipped"),
+            items=items,
+        )
+
+    def test_failed_persistence_is_not_marked_stored(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        """Assembly persists 0/1 items → that article must NOT be stored."""
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+        assembler.assemble.side_effect = lambda enriched: self._assembly_with_statuses(
+            enriched, ["failed"]
+        )
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=mock_extraction,
+            assembler=assembler,
+            state_service=state_service,
+        )
+        result = pipeline.run([sample_article])
+
+        c_hash = compute_content_hash(sample_article.url, sample_article.title)
+        state = state_service.get_status(c_hash)
+        assert state is not None
+        assert state.stage == "stored"
+        assert state.status == "failed"
+        assert result.objects_created == 0
+        assert result.errors[0]["stage"] == "stored"
+        assert result.errors[0]["error_message"] == "db locked"
+
+    def test_all_failed_persistence_marks_nothing_stored(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        """Assembly fails 100% → zero articles may carry a stored checkpoint."""
+        articles = [
+            RawArticle(
+                title=f"Article {i}",
+                url=f"https://example.com/{i}",
+                content=f"Content {i}",
+                published_date=datetime(2025, 1, 1),
+                source_name="test",
+            )
+            for i in range(3)
+        ]
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+        assembler.assemble.side_effect = lambda enriched: self._assembly_with_statuses(
+            enriched, ["failed"] * len(enriched)
+        )
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=mock_extraction,
+            assembler=assembler,
+            state_service=state_service,
+        )
+        result = pipeline.run(articles)
+
+        assert result.objects_created == 0
+        assert result.failed_objects == 3
+        for article in articles:
+            state = state_service.get_status(compute_content_hash(article.url, article.title))
+            assert state is not None
+            assert not (state.stage == "stored" and state.status == "success")
+
+    def test_partial_persistence_marks_only_persisted_items(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        """3/5 persisted → exactly those hashes stored, the rest failed."""
+        articles = [
+            RawArticle(
+                title=f"Article {i}",
+                url=f"https://example.com/{i}",
+                content=f"Content {i}",
+                published_date=datetime(2025, 1, 1),
+                source_name="test",
+            )
+            for i in range(5)
+        ]
+        statuses = ["created", "updated", "created", "failed", "failed"]
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+        assembler.assemble.side_effect = lambda enriched: self._assembly_with_statuses(
+            enriched, statuses
+        )
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=mock_extraction,
+            assembler=assembler,
+            state_service=state_service,
+        )
+        result = pipeline.run(articles)
+
+        assert result.objects_created == 2
+        assert result.objects_updated == 1
+        assert result.failed_objects == 2
+        for article, status in zip(articles, statuses):
+            state = state_service.get_status(compute_content_hash(article.url, article.title))
+            assert state is not None
+            assert state.stage == "stored"
+            assert state.status == ("success" if status in ("created", "updated") else "failed")
+
+    def test_skipped_persistence_is_replay_safe(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        """Idempotent skip (content unchanged) counts as stored on re-runs."""
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+        assembler.assemble.side_effect = lambda enriched: self._assembly_with_statuses(
+            enriched, ["skipped"]
+        )
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=mock_extraction,
+            assembler=assembler,
+            state_service=state_service,
+        )
+        result = pipeline.run([sample_article])
+        assert result.objects_created == 0
+
+        # Re-run: the skipped-persisted article must be checkpoint-skipped
+        result_2 = pipeline.run([sample_article])
+        assert result_2.skipped_objects == 1
+        assert result_2.cleaned == 0
+
+
+# ==============================================================================
+# Async Pipeline Tests (Wiring & Fix Plan A5)
+# ==============================================================================
+
+
+class TestAsyncPipeline:
+    """run_async: deterministic stages sync, extraction as ONE async batch."""
+
+    def _pipeline(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        state_service: ProcessingStateService,
+        assembler: MagicMock,
+        extraction_stage: MagicMock | None = None,
+        batch_extraction_stage=None,
+    ) -> ProcessingPipeline:
+        return ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=extraction_stage,
+            assembler=assembler,
+            state_service=state_service,
+            batch_extraction_stage=batch_extraction_stage,
+        )
+
+    @staticmethod
+    def _enriched(norm: NormalizedArticle, status: str = "success") -> EnrichedArticle:
+        return EnrichedArticle(
+            article=norm,
+            extraction=ExtractionResult(
+                summary="sum", topics=["t"], entities=["e"], relevance_score=0.5
+            )
+            if status == "success"
+            else None,
+            extraction_status=status,
+            extraction_error="LLM exploded" if status != "success" else None,
+        )
+
+    async def test_run_async_batch_extraction(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_assembler: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        """Happy path: one batch call, order preserved, article assembled."""
+        calls: list[list[NormalizedArticle]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            calls.append(articles)
+            return [self._enriched(articles[0])]
+
+        pipeline = self._pipeline(
+            mock_cleaning,
+            mock_normalization,
+            state_service,
+            mock_assembler,
+            batch_extraction_stage=batch,
+        )
+        result = await pipeline.run_async([sample_article])
+
+        assert len(calls) == 1  # extraction ran as ONE batch call
+        assert result.extracted == 1
+        assert result.objects_created == 1
+        c_hash = compute_content_hash(sample_article.url, sample_article.title)
+        state = state_service.get_status(c_hash)
+        assert state is not None
+        assert state.stage == "stored"
+        assert state.status == "success"
+
+    async def test_run_async_mixed_batch_results(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        """One article explodes in the batch → the other still assembles."""
+        good = RawArticle(
+            title="Good",
+            url="https://example.com/good",
+            content="Good content",
+            published_date=datetime(2025, 1, 1),
+            source_name="test",
+        )
+        bad = RawArticle(
+            title="Bad",
+            url="https://example.com/bad",
+            content="Bad content",
+            published_date=datetime(2025, 1, 1),
+            source_name="test",
+        )
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+        assembler.assemble.side_effect = lambda enriched: AssemblyResult(
+            total_input=len(enriched),
+            built_count=len(enriched),
+            valid_count=len(enriched),
+            invalid_count=0,
+            created_count=len(enriched),
+            updated_count=0,
+            skipped_count=0,
+            items=[
+                PersistenceResult(
+                    url=ea.article.url,
+                    content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                    status="created",
+                )
+                for ea in enriched
+            ],
+        )
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            return [
+                self._enriched(articles[0], status="success"),
+                self._enriched(articles[1], status="failed"),
+            ]
+
+        pipeline = self._pipeline(
+            mock_cleaning,
+            mock_normalization,
+            state_service,
+            assembler,
+            batch_extraction_stage=batch,
+        )
+        result = await pipeline.run_async([good, bad])
+
+        assert result.extracted == 1
+        assert result.objects_created == 1  # good article still assembled
+        assert result.failed_objects == 1
+        assert result.errors[0]["stage"] == "extracted"
+        bad_state = state_service.get_status(compute_content_hash(bad.url, bad.title))
+        assert bad_state is not None
+        assert bad_state.status == "failed"
+
+    async def test_run_async_sync_fallback(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        mock_assembler: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        """Without a batch stage, run_async falls back to the sync stage."""
+        pipeline = self._pipeline(
+            mock_cleaning,
+            mock_normalization,
+            state_service,
+            mock_assembler,
+            extraction_stage=mock_extraction,
+        )
+        result = await pipeline.run_async([sample_article])
+
+        assert result.extracted == 1
+        assert result.objects_created == 1
+
+    async def test_run_async_skipped_extraction_not_failed(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_assembler: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        """Content-too-short skips are not pipeline failures."""
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            return [self._enriched(articles[0], status="skipped")]
+
+        pipeline = self._pipeline(
+            mock_cleaning,
+            mock_normalization,
+            state_service,
+            mock_assembler,
+            batch_extraction_stage=batch,
+        )
+        result = await pipeline.run_async([sample_article])
+
+        assert result.extracted == 0
+        assert result.failed_objects == 0
+        assert result.objects_created == 0
+        c_hash = compute_content_hash(sample_article.url, sample_article.title)
+        state = state_service.get_status(c_hash)
+        assert state is not None
+        assert state.stage == "extracted"
+        assert state.status == "skipped"
+
+
+# ==============================================================================
+# Checkpoint Persistence Tests (A4 review regression)
+# ==============================================================================
+
+
+class TestCheckpointPersistence:
+    """flush() must write checkpoints to disk — verified by reloading the
+    state file in a FRESH service, not by asserting the in-memory service."""
+
+    def _fresh_service(self, state_file: Path) -> ProcessingStateService:
+        return ProcessingStateService(storage=ProcessingStateStorage(file_path=state_file))
+
+    def test_run_persists_checkpoint_to_disk(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_extraction: MagicMock,
+        mock_assembler: MagicMock,
+        tmp_path: Path,
+        sample_article: RawArticle,
+    ) -> None:
+        state_file = tmp_path / "persist.json"
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=mock_extraction,
+            assembler=mock_assembler,
+            state_service=self._fresh_service(state_file),
+        )
+        pipeline.run([sample_article])
+
+        reloaded = self._fresh_service(state_file)
+        state = reloaded.get_status(compute_content_hash(sample_article.url, sample_article.title))
+        assert state is not None
+        assert state.stage == "stored"
+        assert state.status == "success"
+
+    async def test_run_async_persists_checkpoint_to_disk(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_assembler: MagicMock,
+        tmp_path: Path,
+        sample_article: RawArticle,
+    ) -> None:
+        state_file = tmp_path / "persist.json"
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            return [
+                EnrichedArticle(
+                    article=a,
+                    extraction=ExtractionResult(
+                        summary="s", topics=["t"], entities=["e"], relevance_score=0.5
+                    ),
+                    extraction_status="success",
+                )
+                for a in articles
+            ]
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=mock_assembler,
+            state_service=self._fresh_service(state_file),
+            batch_extraction_stage=batch,
+        )
+        await pipeline.run_async([sample_article])
+
+        reloaded = self._fresh_service(state_file)
+        state = reloaded.get_status(compute_content_hash(sample_article.url, sample_article.title))
+        assert state is not None
+        assert state.stage == "stored"
+        assert state.status == "success"
+
+
+# ==============================================================================
+# Relevance Gate Wiring Tests (C1)
+# ==============================================================================
+
+
+class TestRelevanceGateWiring:
+    """C1: the gate runs between normalization and extraction."""
+
+    async def test_gate_filters_before_extraction(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        long_article = RawArticle(
+            title="Long enough",
+            url="https://example.com/long",
+            content="x" * 100,
+            published_date=datetime(2025, 1, 1),
+            source_name="test",
+        )
+        short_article = RawArticle(
+            title="Short",
+            url="https://example.com/short",
+            content="tiny",
+            published_date=datetime(2025, 1, 1),
+            source_name="test",
+        )
+
+        received: list[list[NormalizedArticle]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            received.append(list(articles))
+            return [
+                EnrichedArticle(
+                    article=a,
+                    extraction=ExtractionResult(
+                        summary="s", topics=["t"], entities=["e"], relevance_score=0.5
+                    ),
+                    extraction_status="success",
+                )
+                for a in articles
+            ]
+
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+
+        def _assemble(enriched):
+            items = [
+                PersistenceResult(
+                    url=ea.article.url,
+                    content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                    status="created",
+                )
+                for ea in enriched
+            ]
+            return AssemblyResult(
+                total_input=len(enriched),
+                built_count=len(items),
+                valid_count=len(items),
+                invalid_count=0,
+                created_count=len(items),
+                updated_count=0,
+                skipped_count=0,
+                items=items,
+            )
+
+        assembler.assemble.side_effect = _assemble
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=assembler,
+            state_service=state_service,
+            batch_extraction_stage=batch,
+            relevance_gate=RelevanceGate(min_content_length=50),
+        )
+        result = await pipeline.run_async([long_article, short_article])
+
+        # The LLM saw ONLY the kept article — never the full list
+        assert len(received) == 1
+        assert [a.url for a in received[0]] == ["https://example.com/long"]
+        assert result.filtered_objects == 1
+        assert result.objects_created == 1
+
+        # Filtered article has its own terminal checkpoint
+        short_hash = compute_content_hash(short_article.url, short_article.title)
+        state = state_service.get_status(short_hash)
+        assert state is not None
+        assert state.stage == "filtered"
+        assert state.status == "skipped"
+
+        # Re-run: both stored and filtered articles are skipped
+        result_2 = await pipeline.run_async([long_article, short_article])
+        assert result_2.skipped_objects == 2
+        assert len(received) == 1  # no second LLM call
+
+    async def test_gate_disabled_processes_everything(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        mock_assembler: MagicMock,
+        state_service: ProcessingStateService,
+        sample_article: RawArticle,
+    ) -> None:
+        received: list[list[NormalizedArticle]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            received.append(list(articles))
+            return []
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=mock_assembler,
+            state_service=state_service,
+            batch_extraction_stage=batch,
+            relevance_gate=None,
+        )
+        result = await pipeline.run_async([sample_article])
+
+        assert result.filtered_objects == 0
+        assert len(received) == 1
+
+
+# ==============================================================================
+# Bounded Batch Tests (C2)
+# ==============================================================================
+
+
+class TestBoundedBatches:
+    """C2: extraction runs in bounded chunks with a checkpoint per chunk."""
+
+    @staticmethod
+    def _make_articles(count: int) -> list[RawArticle]:
+        return [
+            RawArticle(
+                title=f"Article {i}",
+                url=f"https://example.com/{i}",
+                content=f"Content {i}",
+                published_date=datetime(2025, 1, 1),
+                source_name="test",
+            )
+            for i in range(count)
+        ]
+
+    @staticmethod
+    def _success_batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+        return [
+            EnrichedArticle(
+                article=a,
+                extraction=ExtractionResult(
+                    summary="s", topics=["t"], entities=["e"], relevance_score=0.5
+                ),
+                extraction_status="success",
+            )
+            for a in articles
+        ]
+
+    @staticmethod
+    def _created_assembler() -> MagicMock:
+        assembler = MagicMock(spec=KnowledgeObjectAssembler)
+
+        def _assemble(enriched):
+            items = [
+                PersistenceResult(
+                    url=ea.article.url,
+                    content_hash=compute_content_hash(ea.article.url, ea.article.title),
+                    status="created",
+                )
+                for ea in enriched
+            ]
+            return AssemblyResult(
+                total_input=len(enriched),
+                built_count=len(items),
+                valid_count=len(items),
+                invalid_count=0,
+                created_count=len(items),
+                updated_count=0,
+                skipped_count=0,
+                items=items,
+            )
+
+        assembler.assemble.side_effect = _assemble
+        return assembler
+
+    async def test_candidates_are_extracted_in_chunks(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        state_service: ProcessingStateService,
+    ) -> None:
+        chunks: list[list[str]] = []
+
+        async def batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            chunks.append([a.url for a in articles])
+            return self._success_batch(articles)
+
+        pipeline = ProcessingPipeline(
+            cleaning_stage=mock_cleaning,
+            normalization_stage=mock_normalization,
+            extraction_stage=None,
+            assembler=self._created_assembler(),
+            state_service=state_service,
+            batch_extraction_stage=batch,
+            extraction_batch_size=2,
+        )
+        articles = self._make_articles(5)
+        result = await pipeline.run_async(articles)
+
+        # 5 articles, batch_size=2 -> 3 chunked LLM calls (2+2+1)
+        assert len(chunks) == 3
+        assert [len(c) for c in chunks] == [2, 2, 1]
+        assert result.objects_created == 5
+
+    async def test_crash_mid_run_replays_only_unstored_articles(
+        self,
+        mock_cleaning: MagicMock,
+        mock_normalization: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Crash in chunk 2 -> replay re-extracts ONLY the unfinished chunk."""
+        state_file = tmp_path / "state.json"
+        articles = self._make_articles(4)
+
+        def make_pipeline(batch):
+            storage = ProcessingStateStorage(file_path=state_file)
+            return ProcessingPipeline(
+                cleaning_stage=mock_cleaning,
+                normalization_stage=mock_normalization,
+                extraction_stage=None,
+                assembler=self._created_assembler(),
+                state_service=ProcessingStateService(storage=storage),
+                batch_extraction_stage=batch,
+                extraction_batch_size=2,
+            )
+
+        calls: list[list[str]] = []
+
+        async def crashing_batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            calls.append([a.url for a in articles])
+            if len(calls) == 2:
+                raise RuntimeError("process died mid-run")
+            return self._success_batch(articles)
+
+        with pytest.raises(RuntimeError, match="process died"):
+            await make_pipeline(crashing_batch).run_async(articles)
+
+        assert len(calls) == 2  # chunk 1 done, chunk 2 crashed
+
+        # Replay: fresh pipeline over the same state file
+        replay_calls: list[list[str]] = []
+
+        async def replay_batch(articles: list[NormalizedArticle]) -> list[EnrichedArticle]:
+            replay_calls.append([a.url for a in articles])
+            return self._success_batch(articles)
+
+        result = await make_pipeline(replay_batch).run_async(articles)
+
+        # Only the 2 unstored articles were re-extracted (chunk 1 skipped)
+        assert len(replay_calls) == 1
+        assert sorted(replay_calls[0]) == ["https://example.com/2", "https://example.com/3"]
+        assert result.objects_created == 2
+        assert result.skipped_objects == 2

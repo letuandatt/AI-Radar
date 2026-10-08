@@ -2,13 +2,18 @@
 .venv/
 
 data/
-docs/private-docs/
 dev/
-working/
+dist/
+docs/private-docs/
 qdrant_storage/
+working/
+scripts/kaggle
 
 app/storage/knowledge/knowledge.db
 app/storage/search/bm25_index.pkl
 
 __pycache__/
 *.py[cod]
+
+# Runtime run metrics (P1.9)
+app/storage/metrics/

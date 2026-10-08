@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from app.storage.knowledge.base import CircuitBreaker
+from app.core.circuit_breaker import CircuitBreaker
 from app.storage.vector.base import VectorPoint
 from app.storage.vector.qdrant_store import QdrantVectorStore, VectorStoreError
 

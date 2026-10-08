@@ -5,6 +5,7 @@ providing idempotent ingestion, retry logic, timeout handling,
 and circuit breaker behavior.
 """
 
+import json
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -12,18 +13,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from app.core.logger import get_logger
+from app.core.retry import retry_on_transient_error
 from app.models.knowledge_object import KnowledgeObject
 from app.models.metadata import ExtractionResult
-from app.storage.knowledge.base import (
-    CircuitBreaker,
-    CircuitBreakerOpenError,
-    SQLiteConnectionManager,
-    retry_on_transient_error,
-)
+from app.storage.knowledge.base import SQLiteConnectionManager
 from app.storage.knowledge.indexes import MetadataIndexManager
 from app.storage.knowledge.knowledge_store import SaveResult
-from app.storage.knowledge.schema import ALL_DDL_STATEMENTS
+from app.storage.knowledge.schema import ALL_DDL_STATEMENTS, IDX_CONTENT_ANALYSES_IDENTITY_DDL
 
 logger = get_logger(__name__)
 
@@ -95,8 +93,11 @@ class SQLiteKnowledgeStore:
         with self._op_lock:
             conn = self._conn_manager.get_connection()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 for ddl in ALL_DDL_STATEMENTS:
                     conn.execute(ddl)
+
+                self._ensure_analysis_identity(conn)
 
                 # Ensure metadata indexes exist
                 self._index_manager.ensure_indexes(conn)
@@ -117,6 +118,37 @@ class SQLiteKnowledgeStore:
                 conn.rollback()
                 logger.error("Failed to initialize schema: %s", e)
                 raise
+
+    @staticmethod
+    def _ensure_analysis_identity(conn: sqlite3.Connection) -> None:
+        """Keep the latest legacy analysis per item and enforce its identity.
+
+        Runs inside the schema transaction. Timestamp ties are resolved by
+        creation time, then rowid, so reopening the database is deterministic.
+        """
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'uq_content_analyses_knowledge_id'"
+        ).fetchone()
+        if exists:
+            return
+
+        conn.execute(
+            """
+            DELETE
+            FROM content_analyses
+            WHERE rowid IN (SELECT rowid
+                            FROM (SELECT rowid,
+                                         ROW_NUMBER() OVER (
+                        PARTITION BY knowledge_id
+                        ORDER BY julianday(analyzed_at) DESC,
+                                 julianday(created_at) DESC, rowid DESC
+                    ) AS position
+                                  FROM content_analyses)
+                            WHERE position > 1)
+            """
+        )
+        conn.execute(IDX_CONTENT_ANALYSES_IDENTITY_DDL)
 
     # ------------------------------------------------------------------
     # Circuit Breaker
@@ -151,7 +183,7 @@ class SQLiteKnowledgeStore:
             raise
 
         self._circuit_breaker.record_success()
-        return result  # type: ignore[no-any-return]
+        return result
 
     def get_by_id(self, obj_id: str, include_deleted: bool = False) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by internal ID.
@@ -1001,14 +1033,264 @@ class SQLiteKnowledgeStore:
 
         return UpdateResult(updated=updated, skipped=skipped)
 
+    # =============================================================================
+    # Analyze Content
+    # =============================================================================
+
+    def query_analyses_in_window(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read current analyses and source identities in an inclusive UTC window.
+
+        Excludes soft-deleted knowledge items. Timestamp comparison uses
+        julianday so equivalent instants with different offsets compare correctly.
+        No pagination limit is applied to the analysis input.
+        """
+        self._check_circuit()
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            cursor = conn.execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.themes_json, a.entities_json,
+                       a.sentiment, a.key_claims_json, a.technical_depth, a.confidence,
+                       k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.analyzed_at) >= julianday(?)
+                  AND julianday(a.analyzed_at) <= julianday(?)
+                ORDER BY julianday(a.analyzed_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def query_pattern_items(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read live analyses by stable first-persisted time in (start, end]."""
+        self._check_circuit()
+        with self._op_lock:
+            cursor = self._conn_manager.get_connection().execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.created_at AS first_observed_at,
+                       a.themes_json, a.entities_json, a.sentiment, a.key_claims_json,
+                       a.technical_depth, a.confidence, k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.created_at) > julianday(?)
+                  AND julianday(a.created_at) <= julianday(?)
+                ORDER BY julianday(a.created_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def save_pattern_records(
+        self, records: list[dict[str, Any]], observed_at: str
+    ) -> list[dict[str, Any]]:
+        """Save current records and daily history atomically, preserving first detection.
+
+        Reject stale runs rather than allowing slow LLM responses to overwrite a
+        newer result. Records are JSON data; no service models enter storage.
+        """
+        self._check_circuit()
+        observed = datetime.fromisoformat(observed_at).astimezone(timezone.utc)
+        saved = []
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            for record in records:
+                item = dict(record)
+                old = conn.execute(
+                    "SELECT first_detected, updated_at FROM discovered_patterns "
+                    "WHERE pattern_id = ?",
+                    (item["pattern_id"],),
+                ).fetchone()
+                if old:
+                    if datetime.fromisoformat(old[1]) > observed:
+                        raise ValueError("Cannot overwrite a newer pattern observation")
+                    item["first_detected"] = old[0]
+                else:
+                    item["first_detected"] = observed.isoformat()
+                payload = json.dumps(item, ensure_ascii=False, allow_nan=False)
+                conn.execute(
+                    """
+                    INSERT INTO discovered_patterns VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(pattern_id) DO UPDATE SET
+                        updated_at = excluded.updated_at, payload_json = excluded.payload_json
+                    """,
+                    (
+                        item["pattern_id"],
+                        item["topic"],
+                        item["pattern_type"],
+                        item["time_window_days"],
+                        item["first_detected"],
+                        observed.isoformat(),
+                        payload,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO pattern_snapshots VALUES (?, ?, ?, ?)
+                    ON CONFLICT(pattern_id, observation_date) DO UPDATE SET
+                        observed_at = excluded.observed_at, payload_json = excluded.payload_json
+                    """,
+                    (
+                        item["pattern_id"],
+                        observed.date().isoformat(),
+                        observed.isoformat(),
+                        payload,
+                    ),
+                )
+                saved.append(item)
+        return saved
+
+    def query_pattern_history(self, pattern_id: str) -> list[dict[str, Any]]:
+        """Return daily pattern payloads in chronological UTC order."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json, observed_at FROM pattern_snapshots "
+                    "WHERE pattern_id = ? ORDER BY observation_date",
+                    (pattern_id,),
+                )
+                .fetchall()
+            )
+            return [dict(json.loads(payload), observed_at=observed) for payload, observed in rows]
+
+    def replace_cross_source_groups(
+        self, time_window_days: int, rows: list[dict[str, Any]]
+    ) -> None:
+        """Atomically replace one window's current snapshot, including empty results.
+
+        Concurrent writers are serialized; the last successful replacement wins.
+        Other window lengths are independent. Storage accepts serialized records
+        and does not import analysis service models.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM cross_source_groups WHERE time_window_days = ?",
+                (time_window_days,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO cross_source_groups (
+                    group_id, time_window_days, topic, knowledge_ids_json,
+                    source_count, sources_json, first_seen, last_seen, coverage_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row["group_id"],
+                        time_window_days,
+                        row["topic"],
+                        row["knowledge_ids_json"],
+                        row["source_count"],
+                        row["sources_json"],
+                        row["first_seen"],
+                        row["last_seen"],
+                        row["coverage_score"],
+                    )
+                    for row in rows
+                ],
+            )
+
+    def query_unanalyzed(self, limit: int = 50) -> list[KnowledgeObject]:
+        """Query KnowledgeObjects that do not have a content analysis yet.
+
+        Args:
+            limit: Maximum number of items to return.
+
+        Returns:
+            List of KnowledgeObjects without content analysis,
+            ordered by created_at descending.
+        """
+        self._circuit_breaker.ensure_closed()
+
+        with self._conn_manager.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT *
+                FROM knowledge_objects
+                WHERE id NOT IN (SELECT knowledge_id FROM content_analyses)
+                  AND deleted_at IS NULL
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+
+        return [self._row_to_knowledge_object(row) for row in rows]
+
+    def save_analysis(
+        self,
+        analysis_id: str,
+        knowledge_id: str,
+        analyzed_at: str,
+        themes_json: str,
+        entities_json: str,
+        sentiment: str,
+        key_claims_json: str,
+        technical_depth: str,
+        confidence: float,
+    ) -> None:
+        """Upsert the latest analysis for a KnowledgeObject.
+
+        Repeated saves preserve the existing analysis ID and creation time.
+        Older results cannot overwrite a newer analysis.
+
+        Args:
+            analysis_id: Unique identifier for the analysis.
+            knowledge_id: ID of the analyzed KnowledgeObject.
+            analyzed_at: ISO timestamp of analysis.
+            themes_json: JSON-serialized themes list.
+            entities_json: JSON-serialized entities dict.
+            sentiment: Sentiment value.
+            key_claims_json: JSON-serialized key claims list.
+            technical_depth: Technical depth value.
+            confidence: Confidence score.
+        """
+        self._circuit_breaker.ensure_closed()
+
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO content_analyses (analysis_id, knowledge_id, analyzed_at,
+                                              themes_json, entities_json, sentiment,
+                                              key_claims_json, technical_depth, confidence,
+                                              created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(knowledge_id) DO
+                UPDATE SET
+                    analyzed_at = excluded.analyzed_at,
+                    themes_json = excluded.themes_json,
+                    entities_json = excluded.entities_json,
+                    sentiment = excluded.sentiment,
+                    key_claims_json = excluded.key_claims_json,
+                    technical_depth = excluded.technical_depth,
+                    confidence = excluded.confidence
+                WHERE julianday(excluded.analyzed_at) >= julianday(content_analyses.analyzed_at)
+                """,
+                (
+                    analysis_id,
+                    knowledge_id,
+                    analyzed_at,
+                    themes_json,
+                    entities_json,
+                    sentiment,
+                    key_claims_json,
+                    technical_depth,
+                    confidence,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
     # ------------------------------------------------------------------
     # Save internals
     # ------------------------------------------------------------------
 
     @retry_on_transient_error(
-        max_retries=3,
-        base_delay=0.5,
-        retryable_exceptions=(sqlite3.OperationalError,),
+        exceptions=(sqlite3.OperationalError,),
     )
     def _save_objects_with_retry(self, objects: list[KnowledgeObject]) -> SaveResult:
         """Retry wrapper around the atomic save operation."""
@@ -1195,10 +1477,10 @@ class SQLiteKnowledgeStore:
             title=row[6],
             content_text=row[7],
             metadata=ExtractionResult.model_validate_json(row[8]),
-            fetched_at=self._parse_dt(row[9]),  # type: ignore[arg-type]
+            fetched_at=self._parse_dt(row[9]) or datetime.now(timezone.utc),
             published_at=self._parse_dt(row[10]),
-            created_at=self._parse_dt(row[11]),  # type: ignore[arg-type]
-            updated_at=self._parse_dt(row[12]),  # type: ignore[arg-type]
+            created_at=self._parse_dt(row[11]) or datetime.now(timezone.utc),
+            updated_at=self._parse_dt(row[12]) or datetime.now(timezone.utc),
             parser_version=row[13],
             normalizer_version=row[14],
             extractor_version=row[15],

@@ -7,6 +7,10 @@ of an acquisition or processing pipeline run.
 from dataclasses import dataclass, field
 from datetime import datetime
 
+# Relative import by design: models/ must not depend on other app packages
+# (enforced by tests/core/test_shared_components.py).
+from .article import RawArticle
+
 
 @dataclass(frozen=True)
 class SourceError:
@@ -37,6 +41,8 @@ class AcquisitionResult:
         total_articles: Total number of RawArticles successfully parsed and stored.
         execution_time: Total duration of the pipeline run in seconds.
         errors: A list of detailed errors for each failed source.
+        articles: The parsed RawArticles, forwarded to the processing
+            pipeline (Wiring & Fix Plan A1 — not serialized by to_dict).
     """
 
     timestamp: datetime
@@ -46,6 +52,7 @@ class AcquisitionResult:
     total_articles: int
     execution_time: float
     errors: list[SourceError] = field(default_factory=list)
+    articles: list[RawArticle] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert the result to a dictionary for JSON serialization."""
