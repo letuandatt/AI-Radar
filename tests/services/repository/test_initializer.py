@@ -33,9 +33,13 @@ def config(tmp_path: Path) -> RepositoryConfig:
 
 
 @pytest.fixture
-def initializer(config: RepositoryConfig) -> RepositoryInitializer:
+def initializer(config: RepositoryConfig):
     """Create a RepositoryInitializer with test config."""
-    return RepositoryInitializer(config)
+    with patch("app.services.repository.initializer.QdrantVectorStore", autospec=True) as factory:
+        factory.return_value.count.return_value = 0
+        instance = RepositoryInitializer(config)
+        yield instance
+        instance.shutdown()
 
 
 # =============================================================================

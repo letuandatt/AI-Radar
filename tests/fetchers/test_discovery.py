@@ -138,12 +138,17 @@ class TestPipelineDiscoveryWiring:
 
     @staticmethod
     def _make_pipeline(settings):
-        return DefaultAcquisitionPipeline(
-            rss_registry=MagicMock(get_all=lambda: []),
-            github_registry=MagicMock(get_all=lambda: []),
-            hf_registry=MagicMock(get_all=lambda: []),
-            settings=settings,
-        )
+        with (
+            patch("app.pipelines.acquisition.RSSFetcher"),
+            patch("app.pipelines.acquisition.GitHubFetcher"),
+            patch("app.pipelines.acquisition.HuggingFaceFetcher"),
+        ):
+            return DefaultAcquisitionPipeline(
+                rss_registry=MagicMock(get_all=lambda: []),
+                github_registry=MagicMock(get_all=lambda: []),
+                hf_registry=MagicMock(get_all=lambda: []),
+                settings=settings,
+            )
 
     @patch("app.pipelines.acquisition.save_acquisition_result")
     @patch("app.fetchers.discovery.fetch_huggingface_discovery", return_value=[])
