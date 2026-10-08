@@ -5,6 +5,7 @@ providing idempotent ingestion, retry logic, timeout handling,
 and circuit breaker behavior.
 """
 
+import json
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -1062,6 +1063,100 @@ class SQLiteKnowledgeStore:
             )
             columns = [column[0] for column in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def query_pattern_items(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read live analyses by stable first-persisted time in (start, end]."""
+        self._check_circuit()
+        with self._op_lock:
+            cursor = self._conn_manager.get_connection().execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.created_at AS first_observed_at,
+                       a.themes_json, a.entities_json, a.sentiment, a.key_claims_json,
+                       a.technical_depth, a.confidence, k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.created_at) > julianday(?)
+                  AND julianday(a.created_at) <= julianday(?)
+                ORDER BY julianday(a.created_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def save_pattern_records(
+        self, records: list[dict[str, Any]], observed_at: str
+    ) -> list[dict[str, Any]]:
+        """Save current records and daily history atomically, preserving first detection.
+
+        Reject stale runs rather than allowing slow LLM responses to overwrite a
+        newer result. Records are JSON data; no service models enter storage.
+        """
+        self._check_circuit()
+        observed = datetime.fromisoformat(observed_at).astimezone(timezone.utc)
+        saved = []
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            for record in records:
+                item = dict(record)
+                old = conn.execute(
+                    "SELECT first_detected, updated_at FROM discovered_patterns "
+                    "WHERE pattern_id = ?",
+                    (item["pattern_id"],),
+                ).fetchone()
+                if old:
+                    if datetime.fromisoformat(old[1]) > observed:
+                        raise ValueError("Cannot overwrite a newer pattern observation")
+                    item["first_detected"] = old[0]
+                else:
+                    item["first_detected"] = observed.isoformat()
+                payload = json.dumps(item, ensure_ascii=False, allow_nan=False)
+                conn.execute(
+                    """
+                    INSERT INTO discovered_patterns VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(pattern_id) DO UPDATE SET
+                        updated_at = excluded.updated_at, payload_json = excluded.payload_json
+                    """,
+                    (
+                        item["pattern_id"],
+                        item["topic"],
+                        item["pattern_type"],
+                        item["time_window_days"],
+                        item["first_detected"],
+                        observed.isoformat(),
+                        payload,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO pattern_snapshots VALUES (?, ?, ?, ?)
+                    ON CONFLICT(pattern_id, observation_date) DO UPDATE SET
+                        observed_at = excluded.observed_at, payload_json = excluded.payload_json
+                    """,
+                    (
+                        item["pattern_id"],
+                        observed.date().isoformat(),
+                        observed.isoformat(),
+                        payload,
+                    ),
+                )
+                saved.append(item)
+        return saved
+
+    def query_pattern_history(self, pattern_id: str) -> list[dict[str, Any]]:
+        """Return daily pattern payloads in chronological UTC order."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json, observed_at FROM pattern_snapshots "
+                    "WHERE pattern_id = ? ORDER BY observation_date",
+                    (pattern_id,),
+                )
+                .fetchall()
+            )
+            return [dict(json.loads(payload), observed_at=observed) for payload, observed in rows]
 
     def replace_cross_source_groups(
         self, time_window_days: int, rows: list[dict[str, Any]]

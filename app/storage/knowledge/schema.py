@@ -162,14 +162,49 @@ ON content_analyses(julianday(analyzed_at));
 """
 
 # =============================================================================
+# Discovered Patterns
+# =============================================================================
+
+CREATE_DISCOVERED_PATTERNS_TABLE = """
+CREATE TABLE IF NOT EXISTS discovered_patterns (
+    pattern_id TEXT PRIMARY KEY,
+    topic TEXT NOT NULL,
+    pattern_type TEXT NOT NULL CHECK (pattern_type IN ('emerging', 'recurring', 'declining')),
+    time_window_days INTEGER NOT NULL CHECK (time_window_days >= 7),
+    first_detected TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    payload_json TEXT NOT NULL,
+    UNIQUE(topic, pattern_type, time_window_days)
+);
+"""
+
+CREATE_PATTERN_SNAPSHOTS_TABLE = """
+CREATE TABLE IF NOT EXISTS pattern_snapshots (
+    pattern_id TEXT NOT NULL REFERENCES discovered_patterns(pattern_id),
+    observation_date TEXT NOT NULL,
+    observed_at TIMESTAMP NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY(pattern_id, observation_date)
+);
+"""
+
+IDX_ANALYSIS_FIRST_OBSERVED_DDL = """
+CREATE INDEX IF NOT EXISTS idx_analysis_first_observed
+ON content_analyses(julianday(created_at));
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_DISCOVERED_PATTERNS_TABLE,
+    CREATE_PATTERN_SNAPSHOTS_TABLE,
     CREATE_CROSS_SOURCE_GROUPS_TABLE,
     CREATE_LLM_LOGS_TABLE,
     IDX_LLM_LOGS_CREATED_AT_DDL,
     CREATE_CONTENT_ANALYSES_TABLE,
+    IDX_ANALYSIS_FIRST_OBSERVED_DDL,
     IDX_CONTENT_ANALYSES_WINDOW_DDL,
     IDX_CONTENT_ANALYSES_CREATED_AT_DDL,
     KNOWLEDGE_OBJECTS_DDL,
