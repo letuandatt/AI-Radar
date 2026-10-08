@@ -1032,9 +1032,75 @@ class SQLiteKnowledgeStore:
 
         return UpdateResult(updated=updated, skipped=skipped)
 
-    #
+    # =============================================================================
     # Analyze Content
-    #
+    # =============================================================================
+
+    def query_analyses_in_window(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read current analyses and source identities in an inclusive UTC window.
+
+        Excludes soft-deleted knowledge items. Timestamp comparison uses
+        julianday so equivalent instants with different offsets compare correctly.
+        No pagination limit is applied to the analysis input.
+        """
+        self._check_circuit()
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            cursor = conn.execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.themes_json, a.entities_json,
+                       a.sentiment, a.key_claims_json, a.technical_depth, a.confidence,
+                       k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.analyzed_at) >= julianday(?)
+                  AND julianday(a.analyzed_at) <= julianday(?)
+                ORDER BY julianday(a.analyzed_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def replace_cross_source_groups(
+        self, time_window_days: int, rows: list[dict[str, Any]]
+    ) -> None:
+        """Atomically replace one window's current snapshot, including empty results.
+
+        Concurrent writers are serialized; the last successful replacement wins.
+        Other window lengths are independent. Storage accepts serialized records
+        and does not import analysis service models.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM cross_source_groups WHERE time_window_days = ?",
+                (time_window_days,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO cross_source_groups (
+                    group_id, time_window_days, topic, knowledge_ids_json,
+                    source_count, sources_json, first_seen, last_seen, coverage_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row["group_id"],
+                        time_window_days,
+                        row["topic"],
+                        row["knowledge_ids_json"],
+                        row["source_count"],
+                        row["sources_json"],
+                        row["first_seen"],
+                        row["last_seen"],
+                        row["coverage_score"],
+                    )
+                    for row in rows
+                ],
+            )
+
     def query_unanalyzed(self, limit: int = 50) -> list[KnowledgeObject]:
         """Query KnowledgeObjects that do not have a content analysis yet.
 

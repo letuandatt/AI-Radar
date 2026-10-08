@@ -129,13 +129,36 @@ ON content_analyses(knowledge_id);
 """
 
 # =============================================================================
-#
+# Applied after legacy duplicate cleanup by SQLiteKnowledgeStore.
 # =============================================================================
 
-# Applied after legacy duplicate cleanup by SQLiteKnowledgeStore.
 IDX_CONTENT_ANALYSES_IDENTITY_DDL = """
 CREATE UNIQUE INDEX IF NOT EXISTS uq_content_analyses_knowledge_id
 ON content_analyses(knowledge_id);
+"""
+
+# =============================================================================
+# CROSS SOURCE GROUPS
+# =============================================================================
+
+CREATE_CROSS_SOURCE_GROUPS_TABLE = """
+CREATE TABLE IF NOT EXISTS cross_source_groups (
+    group_id TEXT PRIMARY KEY,
+    time_window_days INTEGER NOT NULL CHECK (time_window_days > 0),
+    topic TEXT NOT NULL,
+    knowledge_ids_json TEXT NOT NULL,
+    source_count INTEGER NOT NULL CHECK (source_count >= 2),
+    sources_json TEXT NOT NULL,
+    first_seen TIMESTAMP NOT NULL,
+    last_seen TIMESTAMP NOT NULL,
+    coverage_score REAL NOT NULL CHECK (coverage_score BETWEEN 0 AND 1),
+    UNIQUE (time_window_days, topic)
+);
+"""
+
+IDX_CONTENT_ANALYSES_WINDOW_DDL = """
+CREATE INDEX IF NOT EXISTS idx_content_analyses_window
+ON content_analyses(julianday(analyzed_at));
 """
 
 # =============================================================================
@@ -143,9 +166,11 @@ ON content_analyses(knowledge_id);
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_CROSS_SOURCE_GROUPS_TABLE,
     CREATE_LLM_LOGS_TABLE,
     IDX_LLM_LOGS_CREATED_AT_DDL,
     CREATE_CONTENT_ANALYSES_TABLE,
+    IDX_CONTENT_ANALYSES_WINDOW_DDL,
     IDX_CONTENT_ANALYSES_CREATED_AT_DDL,
     KNOWLEDGE_OBJECTS_DDL,
     IDX_IDENTITY_DDL,
