@@ -1,6 +1,7 @@
 """Tests for RepositoryAccessService analysis methods."""
 
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,6 +11,7 @@ from app.services.analysis.models import (
     ContentAnalysisResult,
 )
 from app.services.repository.access_service import RepositoryAccessService
+from tests.fakes.analysis import NOW, make_analysis
 
 
 @pytest.fixture
@@ -94,3 +96,40 @@ class TestSaveContentAnalysis:
         id1 = calls[0][1]["analysis_id"]
         id2 = calls[1][1]["analysis_id"]
         assert id1 != id2
+
+
+def test_window_mapping_uses_one_utc_clock_read(access_service, mock_sqlite_store, monkeypatch):
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr("app.services.repository.access_service.datetime", FrozenDateTime)
+    item = make_analysis()
+    row = item.model_dump(mode="json")
+    for key in ("themes", "entities", "key_claims"):
+        row[f"{key}_json"] = json.dumps(row.pop(key))
+    mock_sqlite_store.query_analyses_in_window.return_value = [row]
+    assert access_service.list_items_in_window(7) == [item]
+    mock_sqlite_store.query_analyses_in_window.assert_called_once_with(
+        (NOW - timedelta(days=7)).isoformat(), NOW.isoformat()
+    )
+
+
+@pytest.mark.parametrize("days", [0, -1, True, 1.5, 10**10])
+def test_invalid_window_is_rejected_before_query(access_service, mock_sqlite_store, days):
+    with pytest.raises(ValueError):
+        access_service.list_items_in_window(days)
+    mock_sqlite_store.query_analyses_in_window.assert_not_called()
+
+
+def test_empty_groups_still_replace_selected_window(access_service, mock_sqlite_store):
+    access_service.save_cross_source_groups([], time_window_days=30)
+    mock_sqlite_store.replace_cross_source_groups.assert_called_once_with(30, [])
+
+
+@pytest.mark.parametrize("days", [0, -1, True, 1.5])
+def test_invalid_snapshot_window_is_rejected(access_service, mock_sqlite_store, days):
+    with pytest.raises(ValueError):
+        access_service.save_cross_source_groups([], time_window_days=days)
+    mock_sqlite_store.replace_cross_source_groups.assert_not_called()

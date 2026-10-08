@@ -1,6 +1,6 @@
 """Tests for content analysis models."""
 
-from datetime import timezone
+from datetime import timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -9,7 +9,10 @@ from app.services.analysis.models import (
     AnalysisEntities,
     ContentAnalysisOutput,
     ContentAnalysisResult,
+    CrossSourceCoverage,
+    CrossSourceGroup,
 )
+from tests.fakes.analysis import NOW
 
 
 class TestContentAnalysisOutput:
@@ -114,3 +117,59 @@ class TestContentAnalysisResult:
         result = ContentAnalysisResult.from_output("ko-456", output)
 
         assert result.analyzed_at.tzinfo == timezone.utc
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"source_count": 1},
+        {"source_count": 3},
+        {"knowledge_ids": ["a", "a"]},
+        {"sources": ["rss:a", "rss:a"]},
+        {"coverage_score": 1.1},
+        {"first_seen": NOW + timedelta(seconds=1)},
+        {"first_seen": NOW.replace(tzinfo=None)},
+    ],
+)
+def test_cross_source_group_rejects_invalid_membership(changes):
+    data = dict(
+        group_id="group",
+        topic="theme:rag",
+        knowledge_ids=["a", "b"],
+        source_count=2,
+        sources=["rss:a", "rss:b"],
+        first_seen=NOW,
+        last_seen=NOW,
+        coverage_score=1.0,
+    )
+    with pytest.raises(ValidationError):
+        CrossSourceGroup(**(data | changes))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"article_count": 3},
+        {"source_count": 1},
+        {"total_sources": 1},
+        {"coverage_score": 0.5},
+        {"first_seen": None},
+        {"last_seen": NOW - timedelta(seconds=1)},
+        {"time_window_days": 0},
+    ],
+)
+def test_cross_source_coverage_rejects_inconsistent_statistics(changes):
+    data = dict(
+        topic="theme:rag",
+        time_window_days=7,
+        knowledge_ids=["a", "b"],
+        sources=["rss:a", "rss:b"],
+        article_count=2,
+        source_count=2,
+        total_sources=2,
+        coverage_score=1.0,
+        first_seen=NOW,
+        last_seen=NOW,
+    )
+    with pytest.raises(ValidationError):
+        CrossSourceCoverage(**(data | changes))
