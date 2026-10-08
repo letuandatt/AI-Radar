@@ -129,6 +129,16 @@ ON content_analyses(knowledge_id);
 """
 
 # =============================================================================
+#
+# =============================================================================
+
+# Applied after legacy duplicate cleanup by SQLiteKnowledgeStore.
+IDX_CONTENT_ANALYSES_IDENTITY_DDL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_content_analyses_knowledge_id
+ON content_analyses(knowledge_id);
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 

@@ -20,7 +20,7 @@ from app.models.metadata import ExtractionResult
 from app.storage.knowledge.base import SQLiteConnectionManager
 from app.storage.knowledge.indexes import MetadataIndexManager
 from app.storage.knowledge.knowledge_store import SaveResult
-from app.storage.knowledge.schema import ALL_DDL_STATEMENTS
+from app.storage.knowledge.schema import ALL_DDL_STATEMENTS, IDX_CONTENT_ANALYSES_IDENTITY_DDL
 
 logger = get_logger(__name__)
 
@@ -92,8 +92,11 @@ class SQLiteKnowledgeStore:
         with self._op_lock:
             conn = self._conn_manager.get_connection()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 for ddl in ALL_DDL_STATEMENTS:
                     conn.execute(ddl)
+
+                self._ensure_analysis_identity(conn)
 
                 # Ensure metadata indexes exist
                 self._index_manager.ensure_indexes(conn)
@@ -114,6 +117,37 @@ class SQLiteKnowledgeStore:
                 conn.rollback()
                 logger.error("Failed to initialize schema: %s", e)
                 raise
+
+    @staticmethod
+    def _ensure_analysis_identity(conn: sqlite3.Connection) -> None:
+        """Keep the latest legacy analysis per item and enforce its identity.
+
+        Runs inside the schema transaction. Timestamp ties are resolved by
+        creation time, then rowid, so reopening the database is deterministic.
+        """
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'uq_content_analyses_knowledge_id'"
+        ).fetchone()
+        if exists:
+            return
+
+        conn.execute(
+            """
+            DELETE
+            FROM content_analyses
+            WHERE rowid IN (SELECT rowid
+                            FROM (SELECT rowid,
+                                         ROW_NUMBER() OVER (
+                        PARTITION BY knowledge_id
+                        ORDER BY julianday(analyzed_at) DESC,
+                                 julianday(created_at) DESC, rowid DESC
+                    ) AS position
+                                  FROM content_analyses)
+                            WHERE position > 1)
+            """
+        )
+        conn.execute(IDX_CONTENT_ANALYSES_IDENTITY_DDL)
 
     # ------------------------------------------------------------------
     # Circuit Breaker
@@ -1040,7 +1074,10 @@ class SQLiteKnowledgeStore:
         technical_depth: str,
         confidence: float,
     ) -> None:
-        """Save a content analysis result.
+        """Upsert the latest analysis for a KnowledgeObject.
+
+        Repeated saves preserve the existing analysis ID and creation time.
+        Older results cannot overwrite a newer analysis.
 
         Args:
             analysis_id: Unique identifier for the analysis.
@@ -1055,14 +1092,23 @@ class SQLiteKnowledgeStore:
         """
         self._circuit_breaker.ensure_closed()
 
-        with self._conn_manager.get_connection() as conn:
+        with self._op_lock, self._conn_manager.get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO content_analyses (analysis_id, knowledge_id, analyzed_at,
                                               themes_json, entities_json, sentiment,
                                               key_claims_json, technical_depth, confidence,
                                               created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(knowledge_id) DO
+                UPDATE SET
+                    analyzed_at = excluded.analyzed_at,
+                    themes_json = excluded.themes_json,
+                    entities_json = excluded.entities_json,
+                    sentiment = excluded.sentiment,
+                    key_claims_json = excluded.key_claims_json,
+                    technical_depth = excluded.technical_depth,
+                    confidence = excluded.confidence
+                WHERE julianday(excluded.analyzed_at) >= julianday(content_analyses.analyzed_at)
                 """,
                 (
                     analysis_id,
