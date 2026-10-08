@@ -1,9 +1,8 @@
 """Tests for CostTracker."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
-from future.backports.datetime import timedelta
 
 from app.core.cost_tracker import CostTracker
 from app.core.exceptions import BudgetExceededError
@@ -103,3 +102,36 @@ class TestCheckBudget:
         assert tracker.check_budget(estimated_cost=0.05).allowed is False
         # Smaller estimate still fits
         assert tracker.check_budget(estimated_cost=0.01).allowed is True
+
+
+def test_budget_alert_at_80_percent_once_per_day(caplog, monkeypatch):
+    caplog.set_level("WARNING")
+    tracker = CostTracker(daily_budget_usd=10.0, alert_percent=0.8)
+
+    def alert_count():
+        return sum("LLM budget alert:" in message for message in caplog.messages)
+
+    tracker.track("groq", "test-model", 100, 50, 7.0)
+    assert alert_count() == 0
+
+    tracker.track("groq", "test-model", 100, 50, 1.0)
+    assert alert_count() == 1
+
+    tracker.track("groq", "test-model", 100, 50, 0.5)
+    assert alert_count() == 1
+
+    tomorrow = date.today() + timedelta(days=1)
+    monkeypatch.setattr(
+        "app.core.cost_tracker.date",
+        type("MockDate", (), {"today": staticmethod(lambda: tomorrow)}),
+    )
+
+    assert tracker.snapshot() == {
+        "requests_today": 0,
+        "tokens_today": 0,
+        "current_cost": 0.0,
+    }
+    assert tracker.alert_sent is False
+
+    tracker.track("groq", "test-model", 100, 50, 8.0)
+    assert alert_count() == 2
