@@ -8,8 +8,8 @@ from app.config.settings import Settings, get_settings
 from app.core.logger import get_logger
 from app.services.analysis.content_analyzer import ContentAnalyzer
 from app.services.analysis.cross_source_analyzer import CrossSourceAnalyzer
-from app.services.analysis.service import AnalysisService
 from app.services.analysis.pattern_discoverer import PatternDiscoverer
+from app.services.analysis.service import AnalysisService
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
 
