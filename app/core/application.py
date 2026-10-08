@@ -278,15 +278,15 @@ def _shutdown_processing(pipeline: ProcessingPipeline) -> None:
 
 
 def _init_analysis():
-    """Initialize Content Analysis Service."""
+    """Initialize the content and cross-source analysis component."""
     initializer = _registry.get_component("repository")
     llm_chain = _registry.get_component("llm_chain")
     return create_analysis_service(initializer, llm_chain)
 
 
 def _shutdown_analysis(analysis_service) -> None:
-    """Shutdown Content Analysis Service (no-op, stateless)."""
-    logger.debug("Content analysis service shutdown (no-op)")
+    """Shutdown the analysis component (no-op, stateless)."""
+    logger.debug("Analysis service shutdown (no-op)")
 
 
 def start_application(lifecycle: ApplicationLifecycle) -> None:
