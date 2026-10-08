@@ -31,6 +31,9 @@ if TYPE_CHECKING:
         AnalyzedKnowledgeItem,
         ContentAnalysisResult,
         CrossSourceGroup,
+        DiscoveredPattern,
+        ObservedKnowledgeItem,
+        PatternSnapshot,
     )
 
 logger = get_logger(__name__)
@@ -310,6 +313,49 @@ class RepositoryAccessService:
                 confidence=row["confidence"],
             )
             for row in rows
+        ]
+
+    def list_pattern_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
+        """Read current analysis labels anchored to first persistence in (start, end]."""
+        from app.services.analysis.models import ObservedKnowledgeItem
+
+        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+            raise ValueError("Expected an ordered timezone-aware interval")
+        rows = self._store.query_pattern_items(
+            start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        )
+        items = []
+        for row in rows:
+            data = dict(row)
+            for field in ("themes", "entities", "key_claims"):
+                data[field] = json.loads(data.pop(f"{field}_json"))
+            items.append(ObservedKnowledgeItem.model_validate(data))
+        return items
+
+    def save_discovered_patterns(
+        self, patterns: list["DiscoveredPattern"], observed_at: datetime
+    ) -> list["DiscoveredPattern"]:
+        """Save one run and return records with their preserved first_detected values."""
+        from app.services.analysis.models import DiscoveredPattern
+
+        if observed_at.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        ids = [pattern.pattern_id for pattern in patterns]
+        if len(ids) != len(set(ids)):
+            raise ValueError("pattern IDs must be unique within a run")
+        records = self._store.save_pattern_records(
+            [pattern.model_dump(mode="json") for pattern in patterns],
+            observed_at.astimezone(timezone.utc).isoformat(),
+        )
+        return [DiscoveredPattern.model_validate(record) for record in records]
+
+    def get_pattern_history(self, pattern_id: str) -> list["PatternSnapshot"]:
+        """Read snapshots through the repository gateway, oldest first."""
+        from app.services.analysis.models import PatternSnapshot
+
+        return [
+            PatternSnapshot.model_validate(record)
+            for record in self._store.query_pattern_history(pattern_id)
         ]
 
     def save_cross_source_groups(

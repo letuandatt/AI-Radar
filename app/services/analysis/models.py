@@ -5,9 +5,9 @@ analysis result including metadata fields set by the analyzer.
 """
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class AnalysisEntities(BaseModel):
@@ -142,7 +142,7 @@ class CrossSourceCoverage(BaseModel):
 
     @model_validator(mode="after")
     def validate_statistics(self) -> "CrossSourceCoverage":
-        """Keep counts, coverage and timestamps consistent with membership."""
+        """Keep counts, coverage, and timestamps consistent with membership."""
         if self.article_count != len(set(self.knowledge_ids)) or self.article_count != len(
             self.knowledge_ids
         ):
@@ -165,3 +165,60 @@ class CrossSourceCoverage(BaseModel):
         ):
             raise ValueError("non-empty coverage requires sources and ordered timestamps")
         return self
+
+
+class ObservedKnowledgeItem(AnalyzedKnowledgeItem):
+    """Current labels anchored to the first persisted analysis, not re-analysis."""
+
+    first_observed_at: AwareDatetime
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class DiscoveredPattern(BaseModel):
+    """A deterministic pattern with an LLM-written explanation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    pattern_id: str
+    pattern_type: Literal["emerging", "recurring", "declining"]
+    topic: str
+    time_window_days: int = Field(ge=7)
+    description: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_ids: list[str] = Field(min_length=1)
+    first_detected: AwareDatetime
+    metrics: dict[str, Any]
+
+    @model_validator(mode="after")
+    def unique_evidence(self) -> "DiscoveredPattern":
+        """Prevent duplicate evidence from inflating support."""
+        if len(self.evidence_ids) != len(set(self.evidence_ids)):
+            raise ValueError("evidence_ids must be unique")
+        return self
+
+
+class PatternSnapshot(DiscoveredPattern):
+    """One daily UTC observation; same-day runs replace the previous observation."""
+
+    observed_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def ordered_observation(self) -> "PatternSnapshot":
+        """A snapshot cannot precede the pattern's first detection."""
+        if self.first_detected > self.observed_at:
+            raise ValueError("observed_at must not precede first_detected")
+        return self
+
+
+class PatternDescription(BaseModel):
+    """The only fields the LLM may produce for a precomputed candidate."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    pattern_id: str
+    description: str = Field(min_length=1)
+
+
+class PatternDescriptions(BaseModel):
+    """Structured response for one bounded description batch."""
+
+    model_config = ConfigDict(extra="forbid")
+    descriptions: list[PatternDescription]

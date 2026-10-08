@@ -1,7 +1,6 @@
 """Deterministic cross-source analysis over persisted content analyses."""
 
 import json
-from urllib.parse import quote
 from uuid import NAMESPACE_URL, uuid5
 
 from app.integrations.llm.provider import LLMProvider
@@ -10,6 +9,7 @@ from app.services.analysis.models import (
     CrossSourceCoverage,
     CrossSourceGroup,
 )
+from app.services.analysis.topics import normalize_topic, source_labels, topic_signals
 from app.services.repository.access_service import RepositoryAccessService
 
 
@@ -70,7 +70,7 @@ class CrossSourceAnalyzer:
         Bare text means a theme ("RAG" -> "theme:rag"). Use an explicit
         namespace for entities, for example "models:GPT-4".
         """
-        normalized = self._normalize(topic)
+        normalized = normalize_topic(topic)
         if not normalized:
             raise ValueError("topic must not be empty")
         prefix, separator, value = normalized.partition(":")
@@ -92,18 +92,9 @@ class CrossSourceAnalyzer:
         sources = set()
         for item in items:
             sources.add((item.source_type, item.source_name))
-            signals = {f"theme:{value}" for raw in item.themes if (value := self._normalize(raw))}
-            for kind, values in item.entities.model_dump().items():
-                signals.update(
-                    f"{kind}:{value}" for raw in values if (value := self._normalize(raw))
-                )
-            for signal in sorted(signals):
+            for signal in sorted(topic_signals(item)):
                 buckets.setdefault(signal, []).append(item)
         return buckets, len(sources)
-
-    @staticmethod
-    def _normalize(value: str) -> str:
-        return " ".join(value.split()).casefold()
 
     @staticmethod
     def _coverage(
@@ -112,12 +103,7 @@ class CrossSourceAnalyzer:
         total_sources: int,
         days: int,
     ) -> CrossSourceCoverage:
-        sources = sorted(
-            {
-                f"{quote(item.source_type, safe='')}:{quote(item.source_name, safe='')}"
-                for item in members
-            }
-        )
+        sources = source_labels(members)
         ids = sorted({item.knowledge_id for item in members})
         return CrossSourceCoverage(
             topic=topic,

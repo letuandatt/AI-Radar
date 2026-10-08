@@ -8,7 +8,10 @@ from app.services.analysis.models import (
     ContentAnalysisResult,
     CrossSourceCoverage,
     CrossSourceGroup,
+    DiscoveredPattern,
+    PatternSnapshot,
 )
+from app.services.analysis.pattern_discoverer import PatternDiscoverer
 
 
 @dataclass(frozen=True)
@@ -17,6 +20,7 @@ class AnalysisService:
 
     content: ContentAnalyzer
     cross_source: CrossSourceAnalyzer
+    patterns: PatternDiscoverer
 
     async def analyze(self, knowledge_id: str) -> ContentAnalysisResult:
         """Analyze one item using the existing content analyzer."""
@@ -33,3 +37,11 @@ class AnalysisService:
     def find_coverage(self, topic: str, time_window_days: int = 7) -> CrossSourceCoverage:
         """Read coverage for a theme or typed entity."""
         return self.cross_source.find_coverage(topic, time_window_days)
+
+    def discover_patterns(self, time_window_days: int = 30) -> list[DiscoveredPattern]:
+        """Detect and persist patterns using the shared provider budget."""
+        return self.patterns.discover_patterns(time_window_days)
+
+    def get_pattern_history(self, pattern_id: str) -> list[PatternSnapshot]:
+        """Read daily pattern observations."""
+        return self.patterns.get_pattern_history(pattern_id)

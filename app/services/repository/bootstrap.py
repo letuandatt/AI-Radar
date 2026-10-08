@@ -9,6 +9,7 @@ from app.core.logger import get_logger
 from app.services.analysis.content_analyzer import ContentAnalyzer
 from app.services.analysis.cross_source_analyzer import CrossSourceAnalyzer
 from app.services.analysis.service import AnalysisService
+from app.services.analysis.pattern_discoverer import PatternDiscoverer
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
 
@@ -200,4 +201,5 @@ def create_analysis_service(
         max_concurrent=settings.llm_max_concurrent,
     )
     cross_source = CrossSourceAnalyzer(access_service, llm_chain, max_groups=max_groups)
-    return AnalysisService(content=content, cross_source=cross_source)
+    patterns = PatternDiscoverer(access_service, llm_chain, prompt_loader)
+    return AnalysisService(content=content, cross_source=cross_source, patterns=patterns)

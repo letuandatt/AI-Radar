@@ -9,7 +9,11 @@ from app.services.analysis.models import (
     ContentAnalysisResult,
     CrossSourceCoverage,
     CrossSourceGroup,
+    DiscoveredPattern,
+    ObservedKnowledgeItem,
+    PatternSnapshot,
 )
+from app.services.analysis.pattern_discoverer import PatternDiscoverer
 from app.services.analysis.service import AnalysisService
 
 __all__ = [
@@ -22,4 +26,8 @@ __all__ = [
     "CrossSourceCoverage",
     "CrossSourceAnalyzer",
     "AnalysisService",
+    "DiscoveredPattern",
+    "ObservedKnowledgeItem",
+    "PatternSnapshot",
+    "PatternDiscoverer",
 ]
