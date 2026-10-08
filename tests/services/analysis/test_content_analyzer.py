@@ -1,5 +1,6 @@
 """Tests for ContentAnalyzer service."""
 
+from html import escape
 from unittest.mock import MagicMock
 
 import pytest
@@ -115,8 +116,7 @@ class TestAnalyze:
     ) -> None:
         """Successful analysis returns ContentAnalysisResult."""
         # Setup
-        detail_response = MagicMock()
-        detail_response.knowledge_object = sample_knowledge_object
+        detail_response = KnowledgeDetailResponse(**sample_knowledge_object.model_dump())
         mock_access_service.get_knowledge_item.return_value = detail_response
 
         llm_output = ContentAnalysisOutput(
@@ -137,7 +137,14 @@ class TestAnalyze:
         assert result.knowledge_id == "ko-test-123"
         assert result.themes == ["RAG", "Retrieval"]
         assert result.sentiment == "positive"
-        mock_access_service.save_content_analysis.assert_called_once()
+        mock_access_service.save_content_analysis.assert_called_once_with(result)
+        mock_llm_provider.structured_chat.assert_called_once()
+
+        prompt, schema = mock_llm_provider.structured_chat.call_args.args
+        assert sample_knowledge_object.content_text in prompt
+        assert "<untrusted_data>" in prompt
+        assert "</untrusted_data>" in prompt
+        assert schema is ContentAnalysisOutput
 
     @pytest.mark.asyncio
     async def test_analyze_not_found(self, analyzer, mock_access_service) -> None:
@@ -152,8 +159,7 @@ class TestAnalyze:
         self, analyzer, mock_access_service, mock_llm_provider, sample_knowledge_object
     ) -> None:
         """LLM output with empty themes is rejected."""
-        detail_response = MagicMock()
-        detail_response.knowledge_object = sample_knowledge_object
+        detail_response = KnowledgeDetailResponse(**sample_knowledge_object.model_dump())
         mock_access_service.get_knowledge_item.return_value = detail_response
 
         llm_output = ContentAnalysisOutput(
@@ -195,11 +201,14 @@ class TestAnalyzeBatch:
         mock_access_service.list_unanalyzed_items.return_value = [item1, item2]
 
         # First item: success
-        detail1 = MagicMock()
-        ko1 = MagicMock()
-        ko1.title = "Article 1"
-        ko1.content_text = "Content 1"
-        detail1.knowledge_object = ko1
+        detail1 = KnowledgeDetailResponse(
+            id="ko-1",
+            title="Article 1",
+            source_type="rss",
+            source_name="test",
+            content_hash="hash-1",
+            content_text="Content 1",
+        )
 
         # Second item: not found (will raise ValueError)
         def get_item_side_effect(item_id):
@@ -225,3 +234,73 @@ class TestAnalyzeBatch:
         # Verify: only 1 success
         assert len(results) == 1
         assert results[0].knowledge_id == "ko-1"
+
+
+@pytest.mark.asyncio
+async def test_batch_analyzes_ten_distinct_objects(
+    analyzer, mock_access_service, mock_llm_provider, sample_knowledge_object
+):
+    items = [
+        sample_knowledge_object.model_copy(
+            update={
+                "id": f"ko-{index}",
+                "external_id": f"ext-{index}",
+                "content_hash": f"hash-{index}",
+                "title": f"Article {index}",
+                "content_text": f"Article {index}: <evidence>AI & research</evidence>",
+            }
+        )
+        for index in range(10)
+    ]
+    details = {item.id: KnowledgeDetailResponse(**item.model_dump()) for item in items}
+    mock_access_service.list_unanalyzed_items.return_value = items
+    mock_access_service.get_knowledge_item.side_effect = details.get
+    mock_llm_provider.structured_chat.return_value = ContentAnalysisOutput(
+        themes=["AI"],
+        entities={},
+        sentiment="neutral",
+        key_claims=["Claim"],
+        technical_depth="beginner",
+        confidence=0.8,
+    )
+
+    results = await analyzer.analyze_batch(limit=10)
+
+    assert len(results) == 10
+    assert {result.knowledge_id for result in results} == set(details)
+    mock_access_service.list_unanalyzed_items.assert_called_once_with(10)
+    assert mock_llm_provider.structured_chat.call_count == 10
+    assert mock_access_service.save_content_analysis.call_count == 10
+
+    saved = [call.args[0] for call in mock_access_service.save_content_analysis.call_args_list]
+    assert {result.knowledge_id for result in saved} == set(details)
+
+    prompts = [call.args[0] for call in mock_llm_provider.structured_chat.call_args_list]
+    for item in items:
+        wrapped = f"<untrusted_data>\n{escape(item.content_text)}\n</untrusted_data>"
+        assert sum(wrapped in prompt for prompt in prompts) == 1
+
+    for call in mock_llm_provider.structured_chat.call_args_list:
+        assert call.args[1] is ContentAnalysisOutput
+
+
+@pytest.mark.asyncio
+async def test_analyze_empty_key_claims_rejected(
+    analyzer, mock_access_service, mock_llm_provider, sample_knowledge_object
+):
+    mock_access_service.get_knowledge_item.return_value = KnowledgeDetailResponse(
+        **sample_knowledge_object.model_dump()
+    )
+    mock_llm_provider.structured_chat.return_value = ContentAnalysisOutput(
+        themes=["AI"],
+        entities={},
+        sentiment="neutral",
+        key_claims=[],
+        technical_depth="beginner",
+        confidence=0.8,
+    )
+
+    with pytest.raises(ValueError, match="empty key_claims"):
+        await analyzer.analyze(sample_knowledge_object.id)
+
+    mock_access_service.save_content_analysis.assert_not_called()
