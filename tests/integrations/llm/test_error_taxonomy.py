@@ -34,7 +34,7 @@ class TestClassifyLLMError:
         assert isinstance(classify_llm_error(_FakeAPIStatusError(408)), TransientLLMError)
 
     def test_500_is_transient(self):
-        assert isinstance(classify_llm_error(_FakeAPIStatusError(503)), TransientLLMError)
+        assert isinstance(classify_llm_error(_FakeAPIStatusError(500)), TransientLLMError)
 
     def test_401_is_permanent(self):
         assert isinstance(classify_llm_error(_FakeAPIStatusError(401)), PermanentLLMError)

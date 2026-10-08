@@ -1,6 +1,7 @@
 """Tests for LLMLogger."""
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -127,3 +128,53 @@ class TestLLMLogger:
         conn.close()
         assert "request_type" in columns
         assert "tokens_estimated" in columns
+
+
+@pytest.mark.parametrize("retention_days", [30, 7])
+def test_cleanup_respects_retention_boundary(tmp_path, monkeypatch, retention_days):
+    now = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr("app.integrations.llm.logger.datetime", FrozenDateTime)
+
+    db_path = tmp_path / "retention.db"
+    if retention_days == 30:
+        logger = LLMLogger(db_path)
+    else:
+        logger = LLMLogger(db_path, retention_days=retention_days)
+
+    cutoff = now - timedelta(days=retention_days)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            """
+            INSERT INTO llm_logs (
+                log_id, provider, model, status, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "old",
+                    "ollama",
+                    "test",
+                    "success",
+                    (cutoff - timedelta(seconds=1)).isoformat(),
+                ),
+                ("boundary", "ollama", "test", "success", cutoff.isoformat()),
+                ("recent", "ollama", "test", "success", now.isoformat()),
+            ],
+        )
+
+    assert logger.cleanup_old_logs() == 1
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT log_id FROM llm_logs ORDER BY log_id").fetchall() == [
+            ("boundary",),
+            ("recent",),
+        ]
+
+    assert logger.cleanup_old_logs() == 0

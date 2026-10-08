@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.core.circuit_breaker import CircuitBreakerOpenError
 from app.core.exceptions import BudgetExceededError, PermanentLLMError, TransientLLMError
+from app.integrations.llm.factory import LLMProviderFactory
 from app.integrations.llm.groq_provider import GroqProvider
 from app.integrations.llm.ollama_provider import OllamaProvider
 from app.integrations.llm.provider_chain import LLMProviderChain
@@ -469,3 +470,73 @@ class TestEstimateCost:
         chain = LLMProviderChain([primary, secondary])
 
         assert chain.estimate_cost("Hello") == 0.42
+
+
+@pytest.mark.parametrize(
+    ("provider_class", "create_path"),
+    [
+        (OllamaProvider, "app.integrations.llm.ollama_provider.create_ollama_chat_model"),
+        (GroqProvider, "app.integrations.llm.groq_provider.create_groq_chat_model"),
+    ],
+)
+@pytest.mark.parametrize("method", ["chat", "structured_chat"])
+@pytest.mark.parametrize("status_code", [429, 500, 401, 403])
+def test_provider_retries_only_transient_http_errors(
+    provider_class, create_path, method, status_code, monkeypatch
+):
+    monkeypatch.setattr("app.core.retry.time.sleep", lambda _: None)
+
+    error = type("APIStatusError", (Exception,), {})(f"HTTP {status_code}")
+    error.status_code = status_code
+    error.response = type("Response", (), {"headers": {}})()
+
+    with patch(create_path) as mock_create:
+        model = mock_create.return_value
+        parsed = SampleSchema(answer="Yes", confidence=0.9)
+
+        if method == "chat":
+            invoke = model.invoke
+            response = MagicMock(content="ok", usage_metadata=None)
+            expected = "ok"
+            args = ("Hello",)
+        else:
+            invoke = model.with_structured_output.return_value.invoke
+            response = _structured_result(parsed=parsed)
+            expected = parsed
+            args = ("Hello", SampleSchema)
+
+        invoke.side_effect = [error, response]
+        provider = provider_class()
+
+        if status_code in (429, 500):
+            assert getattr(provider, method)(*args) == expected
+            assert invoke.call_count == 2
+        else:
+            with pytest.raises(PermanentLLMError):
+                getattr(provider, method)(*args)
+            assert invoke.call_count == 1
+
+
+@pytest.mark.parametrize("method", ["chat", "structured_chat"])
+def test_ollama_only_factory_chain_does_not_fallback(method):
+    with (
+        patch("app.integrations.llm.factory.OllamaProvider") as mock_ollama,
+        patch("app.integrations.llm.factory.GroqProvider") as mock_groq,
+    ):
+        provider = mock_ollama.return_value
+        provider.get_provider_name.return_value = "ollama"
+        provider.estimate_cost.return_value = 0.0
+        getattr(provider, method).side_effect = TransientLLMError("Ollama unavailable")
+
+        chain = LLMProviderFactory.create(
+            primary_provider="ollama",
+            fallback_providers=[],
+        )
+
+        args = ("Hello",) if method == "chat" else ("Hello", SampleSchema)
+
+        with pytest.raises(TransientLLMError, match="Ollama unavailable"):
+            getattr(chain, method)(*args)
+
+        getattr(provider, method).assert_called_once_with(*args)
+        mock_groq.assert_not_called()
