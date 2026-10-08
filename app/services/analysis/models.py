@@ -7,7 +7,7 @@ analysis result including metadata fields set by the analyzer.
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 
 class AnalysisEntities(BaseModel):
@@ -85,3 +85,83 @@ class ContentAnalysisResult(BaseModel):
             technical_depth=output.technical_depth,
             confidence=output.confidence,
         )
+
+
+class AnalyzedKnowledgeItem(ContentAnalysisResult):
+    """Current analysis joined to the source identity of a live knowledge item."""
+
+    analyzed_at: AwareDatetime
+    source_type: str
+    source_name: str
+
+
+class CrossSourceGroup(BaseModel):
+    """A normalized theme/entity mentioned by at least two distinct sources.
+
+    Topic keys use theme:, models:, companies:, or people: namespaces.
+    Source labels are URL-escaped source_type:source_name pairs.
+    First/last seen refer to analysis timestamps, not publication timestamps.
+    """
+
+    group_id: str
+    topic: str
+    knowledge_ids: list[str] = Field(min_length=2)
+    source_count: int = Field(ge=2)
+    sources: list[str] = Field(min_length=2)
+    first_seen: AwareDatetime
+    last_seen: AwareDatetime
+    coverage_score: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_membership(self) -> "CrossSourceGroup":
+        """Reject inconsistent counts, duplicate members and reversed dates."""
+        if len(set(self.knowledge_ids)) != len(self.knowledge_ids):
+            raise ValueError("knowledge_ids must be unique")
+        if len(set(self.sources)) != len(self.sources) or self.source_count != len(self.sources):
+            raise ValueError("source_count must match unique sources")
+        if self.source_count > len(self.knowledge_ids):
+            raise ValueError("source_count cannot exceed item count")
+        if self.first_seen > self.last_seen:
+            raise ValueError("first_seen must not exceed last_seen")
+        return self
+
+
+class CrossSourceCoverage(BaseModel):
+    """Coverage for one topic, including empty and single-source matches."""
+
+    topic: str
+    time_window_days: int = Field(gt=0)
+    knowledge_ids: list[str]
+    sources: list[str]
+    article_count: int = Field(ge=0)
+    source_count: int = Field(ge=0)
+    total_sources: int = Field(ge=0)
+    coverage_score: float = Field(ge=0.0, le=1.0)
+    first_seen: AwareDatetime | None
+    last_seen: AwareDatetime | None
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> "CrossSourceCoverage":
+        """Keep counts, coverage and timestamps consistent with membership."""
+        if self.article_count != len(set(self.knowledge_ids)) or self.article_count != len(
+            self.knowledge_ids
+        ):
+            raise ValueError("article_count must match unique knowledge_ids")
+        if self.source_count != len(set(self.sources)) or self.source_count != len(self.sources):
+            raise ValueError("source_count must match unique sources")
+        if self.source_count > min(self.total_sources, self.article_count):
+            raise ValueError("source_count exceeds total_sources or article_count")
+        expected = self.source_count / self.total_sources if self.total_sources else 0.0
+        if abs(self.coverage_score - expected) > 1e-9:
+            raise ValueError("coverage_score must equal source_count / total_sources")
+        if self.article_count == 0:
+            if self.first_seen is not None or self.last_seen is not None:
+                raise ValueError("empty coverage must have no timestamps")
+        elif (
+            self.source_count == 0
+            or self.first_seen is None
+            or self.last_seen is None
+            or self.first_seen > self.last_seen
+        ):
+            raise ValueError("non-empty coverage requires sources and ordered timestamps")
+        return self

@@ -7,6 +7,8 @@ keeping database-specific configuration details out of the application core.
 from app.config.settings import Settings, get_settings
 from app.core.logger import get_logger
 from app.services.analysis.content_analyzer import ContentAnalyzer
+from app.services.analysis.cross_source_analyzer import CrossSourceAnalyzer
+from app.services.analysis.service import AnalysisService
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
 
@@ -168,16 +170,19 @@ def create_llm_chain(settings: Settings):
     )
 
 
-def create_analysis_service(initializer: RepositoryInitializer, llm_chain) -> ContentAnalyzer:
-    """Create ContentAnalyzer service from repository initializer.
+def create_analysis_service(
+    initializer: RepositoryInitializer, llm_chain, *, max_groups: int = 20
+) -> AnalysisService:
+    """Create the analysis component with shared repository and provider dependencies.
 
     Args:
         initializer: Initialized repository with all stores ready.
         llm_chain: Shared LLM provider chain (see create_llm_chain) —
             injected so analysis and extraction count against one budget.
+        max_groups: Maximum number of cross-source groups returned per call.
 
     Returns:
-        Configured ContentAnalyzer instance.
+        AnalysisService preserving analyze()/analyze_batch() for existing callers.
     """
     from app.prompts.loader import PromptLoader
     from app.services.repository.access_service import RepositoryAccessService
@@ -188,9 +193,11 @@ def create_analysis_service(initializer: RepositoryInitializer, llm_chain) -> Co
 
     prompt_loader = PromptLoader()
 
-    return ContentAnalyzer(
+    content = ContentAnalyzer(
         access_service=access_service,
         llm_provider=llm_chain,
         prompt_loader=prompt_loader,
         max_concurrent=settings.llm_max_concurrent,
     )
+    cross_source = CrossSourceAnalyzer(access_service, llm_chain, max_groups=max_groups)
+    return AnalysisService(content=content, cross_source=cross_source)
