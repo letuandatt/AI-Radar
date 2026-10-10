@@ -85,6 +85,8 @@ class TestUpdateKnowledgeEntrypoint:
             bootstrapped.append("analysis")
             analyzer = MagicMock()
             analyzer.analyze_batch = AsyncMock(return_value=[])
+            analyzer.find_groups.return_value = []
+            analyzer.discover_patterns.return_value = []
             return analyzer
 
         def _fake_processing(acquisition_result, pipeline, metrics=None):

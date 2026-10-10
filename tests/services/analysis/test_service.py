@@ -19,7 +19,7 @@ async def test_component_preserves_content_api_and_exposes_cross_source():
     assert await service.analyze("ko-1") is content.analyze.return_value
     assert await service.analyze_batch() is content.analyze_batch.return_value
     content.analyze.assert_awaited_once_with("ko-1")
-    content.analyze_batch.assert_awaited_once_with(50)
+    content.analyze_batch.assert_awaited_once_with(50, raise_on_error=False)
     assert service.find_groups(30) is cross.find_groups.return_value
     assert service.find_coverage("rag", 30) is cross.find_coverage.return_value
     assert service.discover_patterns(30) is patterns.discover_patterns.return_value
