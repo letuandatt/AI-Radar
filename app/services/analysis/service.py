@@ -31,7 +31,11 @@ class AnalysisService:
         return await self.content.analyze_batch(limit)
 
     def find_groups(self, time_window_days: int = 7) -> list[CrossSourceGroup]:
-        """Compute and persist cross-source groups for a window."""
+        """Compute and persist cross-source groups for a window without LLM calls.
+
+        Public API for explicit callers; no automatic scheduler registration.
+        Async callers must use asyncio.to_thread for this blocking operation.
+        """
         return self.cross_source.find_groups(time_window_days)
 
     def find_coverage(self, topic: str, time_window_days: int = 7) -> CrossSourceCoverage:
@@ -39,7 +43,12 @@ class AnalysisService:
         return self.cross_source.find_coverage(topic, time_window_days)
 
     def discover_patterns(self, time_window_days: int = 30) -> list[DiscoveredPattern]:
-        """Detect and persist patterns using the shared provider budget."""
+        """Detect and persist patterns using the shared provider budget.
+
+        Public API for explicit callers; no automatic scheduler registration.
+        Database I/O and LLM requests are synchronous. Async callers must use
+        asyncio.to_thread for the complete call to avoid blocking the event loop.
+        """
         return self.patterns.discover_patterns(time_window_days)
 
     def get_pattern_history(self, pattern_id: str) -> list[PatternSnapshot]:

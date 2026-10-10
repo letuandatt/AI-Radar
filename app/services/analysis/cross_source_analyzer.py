@@ -14,10 +14,10 @@ from app.services.repository.access_service import RepositoryAccessService
 
 
 class CrossSourceAnalyzer:
-    """Group exact normalized themes/entities without additional LLM calls.
+    """Preserve the public constructor contract and configure the group limit.
 
-    A theme and an entity with the same text remain distinct topics. Groups
-    may overlap; sharing one signal never merges unrelated signals transitively.
+    The provider is retained for constructor compatibility only. Exact topic
+    grouping never calls it or consumes the shared LLM request budget.
     """
 
     def __init__(
@@ -38,6 +38,8 @@ class CrossSourceAnalyzer:
 
         Persistence includes all qualifying groups, even those outside top N.
         An empty result clears the previous snapshot for this window only.
+        This synchronous public API is not scheduled automatically. Async callers
+        must offload it with asyncio.to_thread to avoid blocking on database I/O.
         """
         buckets, total_sources = self._load_topics(time_window_days)
         groups = []
