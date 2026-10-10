@@ -5,12 +5,15 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.core.logger import get_logger
 from app.services.analysis.models import (
     ContentAnalysisResult,
     CrossSourceGroup,
     DiscoveredPattern,
 )
 from app.services.analysis.service import AnalysisService
+
+logger = get_logger(__name__)
 
 
 class AnalysisRunResult(BaseModel):
@@ -48,13 +51,19 @@ async def run_analysis(
     fields = metrics if metrics is not None else {}
     fields.update(analysis_stage="content", content_skipped=skip_content)
 
+    logger.info("Content analysis: limit=%d, skipped=%s", limit, skip_content)
+
     content = [] if skip_content else await service.analyze_batch(limit, raise_on_error=True)
     fields.update(analyzed_items=len(content), analysis_stage="cross_source")
 
+    logger.info("Content saved: %d; starting cross-source window=%dd", len(content), group_days)
     groups = await asyncio.to_thread(service.find_groups, group_days)
+
     fields.update(cross_source_groups_returned=len(groups), analysis_stage="patterns")
+    logger.info("Groups returned: %d; starting pattern window=%dd", len(groups), pattern_days)
 
     patterns = await asyncio.to_thread(service.discover_patterns, pattern_days)
     fields.update(patterns_discovered=len(patterns), analysis_stage="complete")
 
+    logger.info("Analysis complete: %d patterns saved", len(patterns))
     return AnalysisRunResult(content=content, groups=groups, patterns=patterns)

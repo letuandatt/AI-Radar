@@ -23,10 +23,13 @@ class CrossSourceAnalyzer:
     def __init__(
         self,
         access_service: RepositoryAccessService,
-        llm_provider: LLMProvider,
+        llm_provider: LLMProvider | None = None,
         max_groups: int = 20,
     ) -> None:
-        """Use the shared provider contract and configure the returned group limit."""
+        """Configure grouping; the optional provider preserves legacy call sites.
+
+        Deterministic grouping requires no provider and makes no LLM requests.
+        """
         if isinstance(max_groups, bool) or not isinstance(max_groups, int) or max_groups <= 0:
             raise ValueError("max_groups must be a positive integer")
         self._access_service = access_service

@@ -7,6 +7,7 @@ from statistics import fmean, pstdev
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from app.core.logger import get_logger
 from app.integrations.llm.provider import LLMProvider
 from app.prompts.builder import PromptBuilder
 from app.prompts.loader import PromptLoader
@@ -18,6 +19,8 @@ from app.services.analysis.models import (
 )
 from app.services.analysis.topics import source_labels, topic_signals
 from app.services.repository.access_service import RepositoryAccessService
+
+logger = get_logger(__name__)
 
 
 class PatternDiscoverer:
@@ -64,13 +67,23 @@ class PatternDiscoverer:
             start = now - timedelta(days=max(2 * days, days + 7))
         except OverflowError as exc:
             raise ValueError("time_window_days exceeds datetime range") from exc
+        logger.info("Pattern discovery: reading observations from %s to %s", start, now)
         items = self._access.list_pattern_items(start, now)
         candidates = self._detect(items, days, now)
+        logger.info(
+            "Pattern discovery: %d observations, %d candidates", len(items), len(candidates)
+        )
         if not candidates:
             return []
         patterns: list[DiscoveredPattern] = []
         for offset in range(0, len(candidates), self._batch_size):
             batch = candidates[offset : offset + self._batch_size]
+            logger.info(
+                "Pattern descriptions: batch %d/%d (%d candidates)",
+                offset // self._batch_size + 1,
+                (len(candidates) + self._batch_size - 1) // self._batch_size,
+                len(batch),
+            )
             payload = [
                 {key: item[key] for key in ("pattern_id", "pattern_type", "topic", "metrics")}
                 for item in batch
@@ -90,6 +103,7 @@ class PatternDiscoverer:
                 DiscoveredPattern(**item, description=descriptions[item["pattern_id"]])
                 for item in batch
             )
+        logger.info("Pattern discovery: saving %d patterns and daily snapshots", len(patterns))
         return self._access.save_discovered_patterns(patterns, observed_at=now)
 
     def get_pattern_history(self, pattern_id: str) -> list[PatternSnapshot]:

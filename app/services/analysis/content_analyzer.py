@@ -134,7 +134,6 @@ class ContentAnalyzer:
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("limit must be a positive integer")
-
         items = await asyncio.to_thread(self._access_service.list_unanalyzed_items, limit)
 
         if not items:
@@ -144,8 +143,10 @@ class ContentAnalyzer:
         logger.info("Analyzing batch of %d items", len(items))
 
         tasks = [self._analyze_with_semaphore(item.id) for item in items]
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Separate successes from failures
         successes: list[ContentAnalysisResult] = []
         failures = 0
 
@@ -172,7 +173,6 @@ class ContentAnalyzer:
                 f"Content analysis incomplete: {failures}/{len(items)} failed; "
                 f"{len(successes)} successful items remain saved"
             )
-
         return successes
 
     async def _analyze_with_semaphore(self, knowledge_id: str) -> ContentAnalysisResult:
