@@ -1,6 +1,7 @@
 """Pattern rules, evidence, structured descriptions, errors and performance."""
 
 from datetime import timedelta
+from html import unescape
 from time import perf_counter
 from unittest.mock import MagicMock
 
@@ -76,7 +77,26 @@ def test_week_boundaries_and_incomplete_week():
     service, _, _ = build(items)
     recurring = next(p for p in service.discover_patterns() if p.pattern_type == "recurring")
     assert recurring.metrics["weekly_counts_newest_first"] == [1, 1, 1, 1]
+    assert recurring.metrics["current_count"] == 6
+    assert recurring.metrics["weekly_window_days"] == 28
+    assert recurring.metrics["weekly_excluded_count"] == 2
     assert recurring.evidence_ids == ["ko-0", "ko-1", "ko-2", "ko-3"]
+
+
+@pytest.mark.parametrize(
+    ("days", "weekly_days", "excluded"), [(28, 28, 0), (30, 28, 2), (35, 35, 0)]
+)
+def test_weekly_metrics_explain_full_window_counts_to_llm(days, weekly_days, excluded):
+    service, _, llm = build([observed(i, i) for i in range(days)])
+    recurring = next(p for p in service.discover_patterns(days) if p.pattern_type == "recurring")
+    metrics = recurring.metrics
+    assert metrics["current_count"] == days
+    assert metrics["weekly_window_days"] == weekly_days
+    assert metrics["weekly_excluded_count"] == excluded
+    assert sum(metrics["weekly_counts_newest_first"]) + excluded == days
+    prompt = unescape(llm.structured_chat.call_args.args[0])
+    assert f'"weekly_window_days": {weekly_days}' in prompt
+    assert f'"weekly_excluded_count": {excluded}' in prompt
 
 
 def test_custom_window_and_multiple_labels():
