@@ -49,6 +49,9 @@ class PatternDiscoverer:
 
         No LLM call or write occurs when there are no candidates. Same-day reruns
         update daily snapshots. Older completed runs cannot overwrite newer ones.
+        This synchronous public API is not scheduled automatically. Database I/O
+        and LLM requests block; async callers must offload the complete call with
+        asyncio.to_thread, not execute it directly on the event loop.
         """
         days = time_window_days
         if isinstance(days, bool) or not isinstance(days, int) or days < 7:
@@ -141,6 +144,8 @@ class PatternDiscoverer:
                 "recent_count": len(recent),
                 "emerging_baseline_count": len(baseline),
                 "weekly_counts_newest_first": counts,
+                "weekly_window_days": week_count * 7,
+                "weekly_excluded_count": len(current) - sum(counts),
                 "cv": cv,
                 "decline_ratio": decline,
                 "current_source_count": len(sources),

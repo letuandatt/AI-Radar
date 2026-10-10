@@ -4,8 +4,12 @@ Return exactly one description for every supplied pattern_id, preserving each ID
 Write a concise Vietnamese description based only on the supplied metrics.
 Do not invent causes, external facts, evidence, or claims of statistical certainty.
 The time basis is the first time an analysis was stored, not publication time.
-Counts describe collected data; missing coverage can reflect ingestion gaps.
-For recurring patterns, weekly_counts_newest_first contains complete 7-day buckets.
+Counts describe collected data; do not infer ingestion gaps from these metrics alone.
+Coverage is topic presence among sources observed in the current window, not ingestion completeness.
+For recurring patterns, weekly_counts_newest_first covers the newest N complete 7-day intervals ending at window_end, where N is the list length; these are not calendar weeks.
+weekly_window_days is the duration covered by those intervals; current_count covers the full window_start to window_end interval.
+The oldest partial interval is excluded from weekly counts. weekly_excluded_count is its item count, so current_count equals the sum of weekly_counts_newest_first plus weekly_excluded_count.
+For a 30-day window, weekly counts cover 28 days. This intentional difference is not evidence of missing data.
 For declining patterns, compare current_count with previous_count.
 For emerging patterns, compare recent_count with emerging_baseline_count.
 Return only the structured descriptions requested by the response schema.
