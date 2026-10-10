@@ -79,7 +79,7 @@ class ContentAnalyzer:
             ValidationError: If LLM output fails validation.
         """
         # 1. Load KnowledgeObject
-        item = self._access_service.get_knowledge_item(knowledge_id)
+        item = await asyncio.to_thread(self._access_service.get_knowledge_item, knowledge_id)
         if item is None:
             raise ValueError(f"KnowledgeObject not found: {knowledge_id}")
 
@@ -107,7 +107,7 @@ class ContentAnalyzer:
         result = ContentAnalysisResult.from_output(knowledge_id, output)
 
         # 6. Save
-        self._access_service.save_content_analysis(result)
+        await asyncio.to_thread(self._access_service.save_content_analysis, result)
 
         logger.info(
             "Analysis complete for %s: %d themes, sentiment=%s, confidence=%.2f",
@@ -119,16 +119,23 @@ class ContentAnalyzer:
 
         return result
 
-    async def analyze_batch(self, limit: int = 50) -> list[ContentAnalysisResult]:
+    async def analyze_batch(
+        self, limit: int = 50, *, raise_on_error: bool = False
+    ) -> list[ContentAnalysisResult]:
         """Analyze a batch of unanalyzed KnowledgeObjects.
 
         Args:
             limit: Maximum number of items to analyze.
+            raise_on_error: Raise after all tasks finish if any item failed.
+                Successful items remain persisted and are skipped on retry.
 
         Returns:
             List of successful analysis results.
         """
-        items = self._access_service.list_unanalyzed_items(limit)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+
+        items = await asyncio.to_thread(self._access_service.list_unanalyzed_items, limit)
 
         if not items:
             logger.debug("No unanalyzed items found")
@@ -137,10 +144,8 @@ class ContentAnalyzer:
         logger.info("Analyzing batch of %d items", len(items))
 
         tasks = [self._analyze_with_semaphore(item.id) for item in items]
-
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Separate successes from failures
         successes: list[ContentAnalysisResult] = []
         failures = 0
 
@@ -161,6 +166,12 @@ class ContentAnalyzer:
             failures,
             len(items),
         )
+
+        if failures and raise_on_error:
+            raise RuntimeError(
+                f"Content analysis incomplete: {failures}/{len(items)} failed; "
+                f"{len(successes)} successful items remain saved"
+            )
 
         return successes
 
