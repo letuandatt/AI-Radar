@@ -44,7 +44,6 @@ def main(argv: list[str] | None = None) -> int:
         "--report", type=Path, help="Write run status and analysis results as JSON."
     )
     args = parser.parse_args(argv)
-
     if args.pattern_days < 7:
         parser.error("--pattern-days must be >= 7")
     if args.skip_content and not args.analysis_only:
@@ -53,11 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-articles does not apply to --analysis-only")
 
     from app.config.settings import get_settings
-    from app.core.logger import get_logger
+    from app.core.logger import get_logger, initialize_logging
 
+    initialize_logging()
     settings = get_settings()
     logger = get_logger("scripts.update_knowledge")
-
     if args.dry_run:
         print("DRY RUN — repository (SQLite + Qdrant + BM25), shared llm_chain")
         input_label = "existing SQLite" if args.analysis_only else args.input_json or "live sources"
@@ -95,27 +94,27 @@ def main(argv: list[str] | None = None) -> int:
     cost_before = None
     analysis_result = None
     exit_code = 1
-
     try:
         cached_articles = None
         if args.input_json:
+            logger.info("Stage input: loading cached articles from %s", args.input_json)
             cached_articles = TypeAdapter(list[RawArticle]).validate_json(
                 args.input_json.read_bytes()
             )
-
         run.set(stage="bootstrap")
+        logger.info("Stage bootstrap: initializing repository at %s", settings.sqlite_path)
         initializer = initialize_knowledge_repository(settings)
+        logger.info("Stage bootstrap: creating shared LLM chain")
         chain = create_llm_chain(settings)
-
         if chain.cost_tracker:
             cost_before = chain.cost_tracker.snapshot()
-
         partial = False
-
         if not args.analysis_only:
             processing = build_processing_pipeline(initializer, settings, chain)
             run.set(stage="acquisition")
-
+            logger.info(
+                "Stage acquisition: %s", "cached input" if args.input_json else "live sources"
+            )
             if cached_articles is not None:
                 acquired = AcquisitionResult(
                     timestamp=datetime.now(timezone.utc),
@@ -140,14 +139,12 @@ def main(argv: list[str] | None = None) -> int:
                 initialize_source_registry(settings)
                 initialize_github_registry(settings)
                 initialize_hf_registry(settings)
-
                 acquired = DefaultAcquisitionPipeline(
                     rss_registry=get_source_registry(),
                     github_registry=get_github_registry(),
                     hf_registry=get_hf_registry(),
                     settings=settings,
                 ).run()
-
             run.set(
                 input_mode="file" if cached_articles is not None else "live",
                 articles_fetched=acquired.total_articles,
@@ -156,14 +153,12 @@ def main(argv: list[str] | None = None) -> int:
                 sources_failed=acquired.failed_sources,
             )
             partial = acquired.failed_sources > 0
-
             if args.max_articles:
                 selected = deduplicate_articles(acquired.articles)[: args.max_articles]
                 acquired = replace(acquired, articles=selected)
-
             run.set(stage="processing", articles_selected=len(acquired.articles))
+            logger.info("Stage processing: %d selected articles", len(acquired.articles))
             processed = run_knowledge_update(acquired, processing, metrics=run.metrics)
-
             if processed is not None:
                 run.set(processing=processed.model_dump(mode="json"))
                 run.set(
@@ -176,10 +171,9 @@ def main(argv: list[str] | None = None) -> int:
                     objects_filtered=processed.filtered_objects,
                 )
                 partial = partial or processed.failed_objects > 0
-
         run.set(stage="analysis")
+        logger.info("Stage analysis: content -> cross-source -> patterns")
         service = create_analysis_service(initializer, chain)
-
         analysis_result = asyncio.run(
             run_analysis(
                 service,
@@ -190,18 +184,14 @@ def main(argv: list[str] | None = None) -> int:
                 metrics=run.metrics,
             )
         )
-
         run.set(status="partial" if partial else "success", stage="complete")
         exit_code = 1 if partial else 0
-
     except Exception as error:
         run.set(status="failed", error_type=type(error).__name__, error=str(error))
         logger.exception("Batch failed in stage %s", run.metrics["stage"])
-
     finally:
         if initializer is not None:
             initializer.shutdown()
-
         if chain is not None and chain.cost_tracker and cost_before is not None:
             cost_after = chain.cost_tracker.snapshot()
             run.set(
@@ -209,12 +199,9 @@ def main(argv: list[str] | None = None) -> int:
                 llm_tokens=cost_after["tokens_today"] - cost_before["tokens_today"],
                 llm_cost_usd=round(cost_after["current_cost"] - cost_before["current_cost"], 6),
             )
-
         run.finish()
-
         try:
             run.save_jsonl(settings.run_metrics_path)
-
             if args.report:
                 report = run.to_dict()
                 report["analysis"] = (
@@ -228,15 +215,12 @@ def main(argv: list[str] | None = None) -> int:
             logger.exception("Could not save run metrics/report")
             run.set(status="failed", stage="report")
             exit_code = 1
-
     print(f"Run {run.run_id}: {run.metrics['status']}; stage={run.metrics['stage']}")
-
     if analysis_result is not None:
         print(
             f"Content={len(analysis_result.content)}, groups={len(analysis_result.groups)}, "
             f"patterns={len(analysis_result.patterns)}"
         )
-
     return exit_code
 
 
