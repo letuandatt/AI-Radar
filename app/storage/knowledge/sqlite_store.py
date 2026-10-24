@@ -1034,6 +1034,112 @@ class SQLiteKnowledgeStore:
         return UpdateResult(updated=updated, skipped=skipped)
 
     # =============================================================================
+    # Identify trend
+    # =============================================================================
+
+    def query_trend_items(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read live analyzed items in [start, end) by first persistence.
+
+        A one-second SQL guard band avoids julianday rounding at microsecond
+        boundaries; the final aware-datetime comparison is exact.
+        """
+        self._check_circuit()
+        lower, upper = datetime.fromisoformat(start), datetime.fromisoformat(end)
+        with self._op_lock:
+            cursor = self._conn_manager.get_connection().execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.created_at AS first_observed_at,
+                       a.themes_json, a.entities_json, a.sentiment, a.key_claims_json,
+                       a.technical_depth, a.confidence, k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.created_at) >= julianday(?) - 1.0 / 86400
+                  AND julianday(a.created_at) < julianday(?) + 1.0 / 86400
+                ORDER BY julianday(a.created_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            return [
+                row
+                for row in rows
+                if lower <= datetime.fromisoformat(row["first_observed_at"]) < upper
+            ]
+
+    def save_trend_snapshots(self, records: list[dict[str, Any]], run: dict[str, Any]) -> None:
+        """Atomically replace a week's complete snapshot, including empty runs.
+
+        BEGIN IMMEDIATE serializes stale-run checks across store instances.
+        Any failure rolls back both run metadata and candidate replacement.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute(
+                "SELECT computed_at FROM trend_runs WHERE week = ?", (run["week"],)
+            ).fetchone()
+            if old and datetime.fromisoformat(old[0]) > datetime.fromisoformat(run["computed_at"]):
+                raise ValueError("Cannot overwrite a newer trend run")
+            conn.execute(
+                "INSERT INTO trend_runs (week, computed_at, payload_json) VALUES (?, ?, ?) "
+                "ON CONFLICT(week) DO UPDATE SET computed_at = excluded.computed_at, "
+                "payload_json = excluded.payload_json",
+                (run["week"], run["computed_at"], json.dumps(run, allow_nan=False)),
+            )
+            conn.execute("DELETE FROM trend_snapshots WHERE week = ?", (run["week"],))
+            for record in records:
+                conn.execute(
+                    """
+                    INSERT INTO trend_snapshots (
+                        snapshot_id, week, trend_id, trend_type, trend_name,
+                        current_count, baseline_count, delta_percent, trend_score,
+                        computed_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record["snapshot_id"],
+                        record["week"],
+                        record["trend_id"],
+                        record["type"],
+                        record["name"],
+                        record["current_count"],
+                        record["baseline_count"],
+                        record["delta_percent"],
+                        record["trend_score"],
+                        record["computed_at"],
+                        json.dumps(record, ensure_ascii=False, allow_nan=False),
+                    ),
+                )
+
+    def list_trend_snapshots(self, week: str) -> list[dict[str, Any]]:
+        """Read unfiltered weekly candidates in deterministic score order."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json FROM trend_snapshots WHERE week = ? "
+                    "ORDER BY trend_score DESC, trend_type, trend_name",
+                    (week,),
+                )
+                .fetchall()
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def get_trend_run(self, week: str) -> dict[str, Any] | None:
+        """Distinguish a computed empty week from a week never computed."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute("SELECT payload_json FROM trend_runs WHERE week = ?", (week,))
+                .fetchone()
+            )
+            return dict(json.loads(row[0])) if row else None
+
+    # =============================================================================
     # Analyze Content
     # =============================================================================
 
