@@ -12,6 +12,7 @@ from app.services.analysis.pattern_discoverer import PatternDiscoverer
 from app.services.analysis.service import AnalysisService
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
+from app.services.trend.identifier import TrendIdentifier
 
 logger = get_logger(__name__)
 
@@ -203,3 +204,12 @@ def create_analysis_service(
     cross_source = CrossSourceAnalyzer(access_service, llm_chain, max_groups=max_groups)
     patterns = PatternDiscoverer(access_service, llm_chain, prompt_loader)
     return AnalysisService(content=content, cross_source=cross_source, patterns=patterns)
+
+
+def create_trend_service(initializer: RepositoryInitializer, settings: Settings) -> TrendIdentifier:
+    """Wire deterministic trend identification without LLM or index dependencies."""
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return TrendIdentifier(
+        RepositoryAccessService(initializer.sqlite_store), min_count=settings.trend_min_count
+    )

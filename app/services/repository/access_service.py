@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         ObservedKnowledgeItem,
         PatternSnapshot,
     )
+    from app.services.trend.models import TrendRun, TrendSnapshot
 
 logger = get_logger(__name__)
 
@@ -278,6 +279,66 @@ class RepositoryAccessService:
                 total=total,
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Trend Identification
+    # ------------------------------------------------------------------
+
+    def list_trend_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
+        """Read live analyzed items in [start, end), anchored to first persistence."""
+        from app.services.analysis.models import ObservedKnowledgeItem
+
+        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+            raise ValueError("Expected an ordered timezone-aware interval")
+        rows = self._store.query_trend_items(
+            start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        )
+        items = []
+        for row in rows:
+            data = dict(row)
+            for field in ("themes", "entities", "key_claims"):
+                data[field] = json.loads(data.pop(f"{field}_json"))
+            items.append(ObservedKnowledgeItem.model_validate(data))
+        return items
+
+    def save_trend_snapshots(self, snapshots: list["TrendSnapshot"], *, run: "TrendRun") -> None:
+        """Validate a full weekly snapshot, then replace it and its run atomically."""
+        from app.services.trend.models import TrendRun, TrendSnapshot
+
+        run = TrendRun.model_validate(run.model_dump())
+        snapshots = [TrendSnapshot.model_validate(item.model_dump()) for item in snapshots]
+        if run.snapshot_count != len(snapshots):
+            raise ValueError("snapshot_count must match the complete candidate list")
+        if len({item.trend_id for item in snapshots}) != len(snapshots):
+            raise ValueError("Duplicate trend identity in one run")
+        for item in snapshots:
+            if (
+                item.week != run.week
+                or item.baseline_week != run.baseline_week
+                or item.computed_at != run.computed_at
+                or item.current_count > run.current_items
+                or item.baseline_count > run.baseline_items
+                or (item.comparison == "baseline_empty") != (run.baseline_items == 0)
+            ):
+                raise ValueError("Snapshot does not match run metadata")
+        self._store.save_trend_snapshots(
+            [item.model_dump(mode="json") for item in snapshots], run.model_dump(mode="json")
+        )
+
+    def list_trend_snapshots(self, week: str) -> list["TrendSnapshot"]:
+        """Return ALL weekly candidates, including below-threshold declines."""
+        from app.services.trend.models import TrendSnapshot, week_start
+
+        week_start(week)
+        return [TrendSnapshot.model_validate(row) for row in self._store.list_trend_snapshots(week)]
+
+    def get_trend_run(self, week: str) -> "TrendRun | None":
+        """Return run metadata, or None when this week has never been computed."""
+        from app.services.trend.models import TrendRun, week_start
+
+        week_start(week)
+        row = self._store.get_trend_run(week)
+        return TrendRun.model_validate(row) if row is not None else None
 
     # ------------------------------------------------------------------
     # Content Analysis Management
