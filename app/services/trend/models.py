@@ -151,3 +151,74 @@ class WeeklyTrendReport(TrendRun):
     """Returned trend pass min_count; snapshot_count includes ALL candidates."""
 
     trends: list[Trend]
+
+
+class WeeklyCount(BaseModel):
+    """Window-relative count from a completed UTC week's persisted run.
+
+    missing_run has count=None. empty_run has count=0 but no observed cohort.
+    observed means the run had analyzed items; an absent signal then counts as 0.
+    None of these states guarantees complete source ingestion.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    week: str
+    count: int | None = Field(ge=0)
+    status: Literal["observed", "empty_run", "missing_run"]
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> "WeeklyCount":
+        """Keep unavailable data distinct from an observed zero."""
+        week_start(self.week)
+        if (self.count is None) != (self.status == "missing_run"):
+            raise ValueError("Only missing_run has count=None")
+        if self.status == "empty_run" and self.count != 0:
+            raise ValueError("An empty run must have count=0")
+        return self
+
+
+class TrendEvolution(BaseModel):
+    """Evolution of saved current_count values, never baseline backfills.
+
+    Classification requires the entire requested window to be observed, with
+    at least three consecutive weeks. Otherwise pattern/volatility are None.
+    Volatility is population std_dev / mean, with 0 for an all-zero series.
+    Such a series is no_activity, not evidence of a stable active trend.
+    unclassified preserves cases outside the four specified pattern rules.
+    """
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, frozen=True)
+    trend_id: str
+    type: TrendType
+    name: str = Field(min_length=1)
+    weekly_counts: list[WeeklyCount] = Field(min_length=1)
+    observed_weeks: int = Field(ge=0)
+    pattern: Literal["growing", "stable", "declining", "volatile"] | None
+    volatility: float | None = Field(ge=0)
+    status: Literal["classified", "insufficient_history", "no_activity", "unclassified"]
+
+    @model_validator(mode="after")
+    def validate_history(self) -> "TrendEvolution":
+        """Validate identity, consecutive weeks and classification availability."""
+        if self.trend_id != trend_identity(self.type, self.name):
+            raise ValueError("trend_id must match type and name")
+        starts = [week_start(point.week) for point in self.weekly_counts]
+        if any(right - left != timedelta(days=7) for left, right in zip(starts, starts[1:])):
+            raise ValueError("weekly_counts must be consecutive and chronological")
+        observed = sum(point.status == "observed" for point in self.weekly_counts)
+        if self.observed_weeks != observed:
+            raise ValueError("observed_weeks must match weekly_counts")
+        insufficient = observed != len(starts) or observed < 3
+        if (self.status == "insufficient_history") != insufficient:
+            raise ValueError("Classification requires a fully observed window of at least 3 weeks")
+        if (self.pattern is not None) != (self.status == "classified"):
+            raise ValueError("Only classified results have a pattern")
+        if (self.volatility is None) != insufficient:
+            raise ValueError("Volatility is unavailable for insufficient history")
+        if not insufficient:
+            inactive = all(point.count == 0 for point in self.weekly_counts)
+            if (self.status == "no_activity") != inactive:
+                raise ValueError("Only an all-zero observed series has no_activity")
+            if inactive and self.volatility != 0:
+                raise ValueError("All-zero volatility must be 0")
+        return self
