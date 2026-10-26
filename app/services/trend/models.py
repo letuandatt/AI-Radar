@@ -222,3 +222,75 @@ class TrendEvolution(BaseModel):
             if inactive and self.volatility != 0:
                 raise ValueError("All-zero volatility must be 0")
         return self
+
+
+class RankedTrend(BaseModel):
+    """A trend and its history, with a position local to the containing list."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    rank: int = Field(ge=1)
+    trend: Trend
+    evolution: TrendEvolution
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> "RankedTrend":
+        """Do not attach another signal's history to a ranked trend."""
+        if (self.trend.trend_id, self.trend.type, self.trend.name) != (
+            self.evolution.trend_id,
+            self.evolution.type,
+            self.evolution.name,
+        ):
+            raise ValueError("Trend and evolution identities must match")
+        return self
+
+
+class TrendRanking(BaseModel):
+    """Weekly score ranking over all saved candidates, without min_count filtering.
+
+    Growing/declining use the baseline delta, not the multiweek evolution pattern.
+    All lists use descending score; declining is not ordered by decline magnitude.
+    Empty current cohorts suppress rankings even if baseline-only snapshots exist.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    week: str
+    run: TrendRun
+    status: Literal["ready", "baseline_empty", "empty_current"]
+    evolution_weeks: int = Field(ge=1)
+    top_growing: list[RankedTrend] = Field(max_length=10)
+    top_declining: list[RankedTrend] = Field(max_length=10)
+    top_by_type: dict[TrendType, list[RankedTrend]]
+
+    @model_validator(mode="after")
+    def validate_context(self) -> "TrendRanking":
+        """Validate run state, local positions and the history's target week."""
+        if self.week != self.run.week:
+            raise ValueError("Ranking week must match its run")
+        expected = (
+            "empty_current"
+            if not self.run.current_items
+            else "baseline_empty"
+            if not self.run.baseline_items
+            else "ready"
+        )
+        if self.status != expected:
+            raise ValueError("Ranking status must match observed cohorts")
+        if set(self.top_by_type) != {"topic", "source", "entity"}:
+            raise ValueError("All three trend types must be present")
+        groups = [self.top_growing, self.top_declining, *self.top_by_type.values()]
+        if self.status == "empty_current" and any(groups):
+            raise ValueError("An empty current cohort cannot produce ranked trends")
+        for group in groups:
+            if len({item.trend.trend_id for item in group}) != len(group):
+                raise ValueError("Duplicate trend in one ranking list")
+            for position, item in enumerate(group, 1):
+                history = item.evolution.weekly_counts
+                if (
+                    item.rank != position
+                    or len(history) != self.evolution_weeks
+                    or history[-1].week != self.week
+                    or history[-1].status != "observed"
+                    or history[-1].count != item.trend.current_count
+                ):
+                    raise ValueError("Invalid rank position or evolution window")
+        return self
