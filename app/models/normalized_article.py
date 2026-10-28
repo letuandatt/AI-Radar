@@ -33,6 +33,7 @@ class NormalizedArticle(BaseModel):
     title: str = Field(..., description="Standardized article title")
     content: str = Field(..., description="Standardized article content")
     url: str = Field(..., description="Standardized article URL")
+    github_stars: int | None = Field(default=None, ge=0, strict=True)
     source_name: str = Field(..., description="Name of the source")
     source_type: str = Field(..., description="Type of source: rss, github, huggingface")
     author: str | None = Field(default=None, description="Article author (optional)")

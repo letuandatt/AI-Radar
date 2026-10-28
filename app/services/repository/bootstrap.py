@@ -213,3 +213,13 @@ def create_trend_service(initializer: RepositoryInitializer, settings: Settings)
     return TrendIdentifier(
         RepositoryAccessService(initializer.sqlite_store), min_count=settings.trend_min_count
     )
+
+
+def create_importance_service(initializer: RepositoryInitializer, llm_chain, settings: Settings):
+    """Wire scoring to the existing repository and shared budget/provider chain."""
+    from app.services.importance.scorer import ImportanceScorer
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return ImportanceScorer(
+        RepositoryAccessService(initializer.sqlite_store), llm_chain, settings.importance
+    )

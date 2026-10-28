@@ -45,8 +45,9 @@ class KnowledgeObject(BaseModel):
     # System generated
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="System-generated UUID")
 
-    # Provenance & Identity (DATA-001)
+    # Provenance & Identity
     source_type: str = Field(..., description="Source type: rss, github, huggingface")
+    github_stars: int | None = Field(default=None, ge=0, strict=True)
     source_name: str = Field(..., description="Name of the source")
     external_id: str = Field(
         ..., description="External ID from the source (e.g., NormalizedArticle.article_id)"

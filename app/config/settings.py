@@ -5,12 +5,16 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.config.importance import ImportanceConfig
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
     )
+
+    importance: ImportanceConfig = Field(default_factory=ImportanceConfig)
 
     groq_api_key: SecretStr
     cohere_api_key: str
