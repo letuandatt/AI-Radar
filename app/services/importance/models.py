@@ -107,6 +107,45 @@ class ImportanceScore(BaseModel):
         return self
 
 
+class RelevanceAssessment(BaseModel):
+    """Topic fit against at most five retrieved neighbors, not a calibrated probability.
+
+    base_relevance comes from the saved extraction component of ImportanceScore.
+    Topic consistency is mean Jaccard overlap over neighbors with nonempty topics.
+    Missing context preserves the base score and is excluded from irrelevant scans.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    knowledge_id: str = Field(min_length=1)
+    assessed_at: AwareDatetime
+    relevance_score: Unit
+    related_items: list[str] = Field(max_length=5)
+    topic_consistency: Unit | None
+    base_relevance: Unit
+    status: Literal["assessed", "insufficient_context"]
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_assessment(self) -> "RelevanceAssessment":
+        """Keep missing evidence distinct from observed zero overlap."""
+        ids = self.related_items
+        if any(not value.strip() or value == self.knowledge_id for value in ids):
+            raise ValueError("Related IDs must be nonblank and exclude the assessed item")
+        if len(ids) != len(set(ids)):
+            raise ValueError("Related IDs must be unique")
+        if self.status == "assessed":
+            if not ids or self.topic_consistency is None:
+                raise ValueError("Assessed results require neighbors and topic consistency")
+            expected = 0.7 * self.base_relevance + 0.3 * self.topic_consistency
+        else:
+            if self.topic_consistency is not None:
+                raise ValueError("Insufficient context requires unknown topic consistency")
+            expected = self.base_relevance
+        if not isclose(self.relevance_score, expected, rel_tol=0, abs_tol=1e-12):
+            raise ValueError("Relevance score must match the assessment formula")
+        return self
+
+
 class PriorityLevel(str, Enum):
     """Fixed score bands, independent of digest policy; ARCHIVE never deletes data."""
 
