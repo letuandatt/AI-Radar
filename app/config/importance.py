@@ -1,11 +1,13 @@
 """Validated importance policy; defaults are initial heuristics, not calibrated probabilities."""
 
 from math import isclose
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import quote, unquote
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Unit = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+DigestCategory = Literal["papers", "github", "news"]
 
 
 class ImportanceConfig(BaseModel):
@@ -33,6 +35,9 @@ class ImportanceConfig(BaseModel):
     threshold_github: Unit = 0.6
     threshold_news: Unit = 0.65
 
+    # Exact escaped source_type:source_name keys; GitHub is recognized directly.
+    digest_source_categories: dict[str, DigestCategory] = Field(default_factory=dict)
+
     @property
     def weights(self) -> dict[str, float]:
         """Expose the six named components in formula order."""
@@ -52,4 +57,14 @@ class ImportanceConfig(BaseModel):
             raise ValueError("Importance weights must sum to 1")
         if any(not key.strip() or ":" not in key for key in self.source_authorities):
             raise ValueError("Authority keys must be escaped source_type:name labels")
+        for key, category in self.digest_source_categories.items():
+            parts = key.split(":")
+            if len(parts) != 2 or any(
+                not unquote(part).strip() or quote(unquote(part), safe="") != part for part in parts
+            ):
+                raise ValueError(
+                    "Digest mapping keys must be escaped source_type:source_name labels"
+                )
+            if parts[0] == "github" and category != "github":
+                raise ValueError("GitHub sources must use the github digest category")
         return self

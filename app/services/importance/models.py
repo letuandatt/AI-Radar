@@ -1,11 +1,13 @@
 """Auditable scoring contracts; observations do not guarantee ingestion completeness."""
 
 from datetime import timedelta
-from math import isclose
+from enum import Enum
+from math import isclose, isfinite
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from app.config.importance import DigestCategory
 from app.models.knowledge_object import KnowledgeObject
 from app.services.analysis.models import AnalyzedKnowledgeItem
 from app.services.importance.config import ImportanceConfig, Unit
@@ -102,4 +104,68 @@ class ImportanceScore(BaseModel):
             or week_start(context.trend_week) + timedelta(days=7) > self.computed_at
         ):
             raise ValueError("Invalid score context window")
+        return self
+
+
+class PriorityLevel(str, Enum):
+    """Fixed score bands, independent of digest policy; ARCHIVE never deletes data."""
+
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    ARCHIVE = "ARCHIVE"
+
+    @property
+    def threshold(self) -> float:
+        """Inclusive lower bound; also defines the explicit priority ordering."""
+        return {
+            PriorityLevel.CRITICAL: 0.9,
+            PriorityLevel.HIGH: 0.75,
+            PriorityLevel.MEDIUM: 0.6,
+            PriorityLevel.LOW: 0.4,
+            PriorityLevel.ARCHIVE: 0.0,
+        }[self]
+
+    @classmethod
+    def from_score(cls, score: float) -> "PriorityLevel":
+        """Classify the original finite score without rounding."""
+        if not isfinite(score) or not 0 <= score <= 1:
+            raise ValueError("Priority score must be finite and between 0 and 1")
+        return next(level for level in cls if score >= level.threshold)
+
+
+class PriorityEvaluation(BaseModel):
+    """Evaluate a saved final score using current digest policy.
+
+    threshold_applied is the priority band's lower bound. Unknown digest
+    categories leave all three digest fields None, distinct from ineligibility.
+    This result does not refresh scores, select a digest, or archive an item.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    knowledge_id: str = Field(min_length=1)
+    priority: PriorityLevel
+    score: Unit
+    threshold_applied: Unit
+    reason: str = Field(min_length=1)
+    digest_category: DigestCategory | None = None
+    digest_threshold: Unit | None = None
+    digest_eligible: bool | None = Field(default=None, strict=True)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "PriorityEvaluation":
+        """Reject contradictory bands, thresholds and digest decisions."""
+        if (
+            self.priority != PriorityLevel.from_score(self.score)
+            or self.threshold_applied != self.priority.threshold
+        ):
+            raise ValueError("Priority and threshold must match the score band")
+        if self.digest_category is None:
+            if self.digest_threshold is not None or self.digest_eligible is not None:
+                raise ValueError("Unknown digest category requires unknown eligibility")
+        elif self.digest_threshold is None or self.digest_eligible != (
+            self.score >= self.digest_threshold
+        ):
+            raise ValueError("Known digest category requires a matching threshold decision")
         return self
