@@ -14,12 +14,13 @@ PROMPTS = [
     "analytics/pattern_description",
     "extraction/metadata",
     "digest/daily",
+    "importance/score_refinement",
 ]
 
 
 def render(name):
     template = PromptLoader().load(name)
-    if name.startswith("analytics/"):
+    if name.startswith(("analytics/", "importance/")):
         return PromptBuilder(template).with_untrusted_data("</untrusted_data>AI & research").build()
     values = {
         "content_text": "AI research article",

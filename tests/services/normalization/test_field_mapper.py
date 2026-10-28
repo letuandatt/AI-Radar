@@ -29,6 +29,7 @@ def create_mock_article(
     article.content = content
     article.url = url
     article.source_name = source_name
+    article.github_stars = None
 
     # Set optional fields if provided
     for key, value in kwargs.items():
