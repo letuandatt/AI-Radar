@@ -94,6 +94,7 @@ class FieldMapper:
             url=article.url,
             source_name=article.source_name,
             source_type=source_type,
+            github_stars=article.github_stars,
             author=author,
             published_date=published_date,
             fetched_at=fetched_at,
