@@ -241,6 +241,13 @@ class Settings(BaseSettings):
         "Defaults to today if None.",
     )
 
+    # --- Weekly trend identification ---
+    trend_min_count: int = Field(
+        default=3,
+        ge=1,
+        description="Minimum current-week count for returned trends; snapshots remain unfiltered.",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

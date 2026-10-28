@@ -25,6 +25,7 @@ def isolate_external_components(monkeypatch):
         "analysis",
         "processing",
         "acquisition",
+        "trend",
     ):
         monkeypatch.setattr(application, f"_init_{name}", MagicMock())
         monkeypatch.setattr(application, f"_shutdown_{name}", MagicMock())

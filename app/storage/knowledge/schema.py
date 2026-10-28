@@ -194,10 +194,46 @@ ON content_analyses(julianday(created_at));
 """
 
 # =============================================================================
+# Trend Identification
+# =============================================================================
+
+CREATE_TREND_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS trend_runs (
+    week TEXT PRIMARY KEY,
+    computed_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+"""
+
+CREATE_TREND_SNAPSHOTS_TABLE = """
+CREATE TABLE IF NOT EXISTS trend_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    week TEXT NOT NULL REFERENCES trend_runs(week),
+    trend_id TEXT NOT NULL,
+    trend_type TEXT NOT NULL CHECK (trend_type IN ('topic', 'source', 'entity')),
+    trend_name TEXT NOT NULL,
+    current_count INTEGER NOT NULL CHECK (current_count >= 0),
+    baseline_count INTEGER NOT NULL CHECK (baseline_count >= 0),
+    delta_percent REAL,
+    trend_score REAL NOT NULL,
+    computed_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    UNIQUE(week, trend_id)
+);
+"""
+
+IDX_TREND_HISTORY = """
+CREATE INDEX IF NOT EXISTS idx_trend_history ON trend_snapshots(trend_id, week);
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_TREND_RUNS_TABLE,
+    CREATE_TREND_SNAPSHOTS_TABLE,
+    IDX_TREND_HISTORY,
     CREATE_DISCOVERED_PATTERNS_TABLE,
     CREATE_PATTERN_SNAPSHOTS_TABLE,
     CREATE_CROSS_SOURCE_GROUPS_TABLE,

@@ -101,6 +101,10 @@ class CrossSourceGroup(BaseModel):
     Topic keys use theme:, models:, companies:, or people: namespaces.
     Source labels are URL-escaped source_type:source_name pairs.
     First/last seen refer to analysis timestamps, not publication timestamps.
+    Coverage is window-relative: topic source count divided by distinct sources
+    with at least one live analyzed item in the same analyzed_at window. Sources
+    without such items are excluded, even if configured. A score of 1.0 means
+    all observed sources mention the topic, not complete ingestion coverage.
     """
 
     group_id: str
@@ -127,7 +131,15 @@ class CrossSourceGroup(BaseModel):
 
 
 class CrossSourceCoverage(BaseModel):
-    """Coverage for one topic, including empty and single-source matches."""
+    """Coverage for one topic, including empty and single-source matches.
+
+    total_sources counts distinct (source_type, source_name) pairs across live
+    analyzed items in the requested analyzed_at window, regardless of topic.
+    It is not the number of configured sources. coverage_score is source_count
+    divided by this window-relative total, or 0.0 when that total is zero.
+    The score measures topic presence among observed sources, not ingestion
+    completeness, source reliability, or coverage outside the selected window.
+    """
 
     topic: str
     time_window_days: int = Field(gt=0)
@@ -175,7 +187,17 @@ class ObservedKnowledgeItem(AnalyzedKnowledgeItem):
 
 
 class DiscoveredPattern(BaseModel):
-    """A deterministic pattern with an LLM-written explanation."""
+    """A deterministic pattern with an LLM-written explanation.
+
+    metrics coverage is window-relative: current_source_count / total_sources,
+    or 0.0 for an empty denominator. Both counts use live analyzed items in the
+    current first_observed_at window; total_sources includes all topics, not all
+    configured sources. This is topic presence, not ingestion completeness.
+    Weekly metrics cover the newest consecutive 7-day intervals ending at
+    window_end, not calendar weeks. weekly_window_days excludes the oldest
+    partial interval; weekly_excluded_count counts its items in current_count.
+    Older persisted records may lack these two explanatory weekly fields.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     pattern_id: str
@@ -197,7 +219,11 @@ class DiscoveredPattern(BaseModel):
 
 
 class PatternSnapshot(DiscoveredPattern):
-    """One daily UTC observation; same-day runs replace the previous observation."""
+    """One daily UTC observation; same-day runs replace the previous observation.
+
+    Written only when the pattern is detected. Missing dates are not zero-count
+    observations. History currently has no automatic retention or pruning.
+    """
 
     observed_at: AwareDatetime
 
