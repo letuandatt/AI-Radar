@@ -42,7 +42,8 @@ _SELECT_COLUMNS = """
     updated_at,
     parser_version,
     normalizer_version,
-    extractor_version
+    extractor_version,
+    github_stars
 """
 
 
@@ -97,6 +98,12 @@ class SQLiteKnowledgeStore:
                 for ddl in ALL_DDL_STATEMENTS:
                     conn.execute(ddl)
 
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_objects)")}
+                if "github_stars" not in columns:
+                    conn.execute(
+                        "ALTER TABLE knowledge_objects ADD COLUMN github_stars INTEGER "
+                        "CHECK (github_stars IS NULL OR github_stars >= 0)"
+                    )
                 self._ensure_analysis_identity(conn)
 
                 # Ensure metadata indexes exist
@@ -1037,6 +1044,123 @@ class SQLiteKnowledgeStore:
     # Identify trend
     # =============================================================================
 
+    def load_importance_inputs(
+        self, ids: list[str], start: str, end: str, week: str
+    ) -> dict[str, Any]:
+        """Read candidates, live analyses and a trend run in one SQLite snapshot.
+
+        Chunk ID queries for SQLite parameter limits. The one-second SQL guard
+        band is trimmed by exact aware datetime comparisons in the access layer.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            objects: list[KnowledgeObject] = []
+            analyses: dict[str, dict[str, Any]] = {}
+            analysis_sql = """
+                SELECT a.knowledge_id, a.analyzed_at, a.themes_json, a.entities_json,
+                       a.sentiment, a.key_claims_json, a.technical_depth, a.confidence,
+                       k.source_type, k.source_name
+                FROM content_analyses a JOIN knowledge_objects k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL AND
+            """
+
+            def collect(cursor: sqlite3.Cursor) -> None:
+                names = [column[0] for column in cursor.description]
+                for row in cursor.fetchall():
+                    value = dict(zip(names, row))
+                    analyses[value["knowledge_id"]] = value
+
+            collect(
+                conn.execute(
+                    analysis_sql + " julianday(a.analyzed_at) BETWEEN julianday(?) - 1.0/86400 "
+                    "AND julianday(?) + 1.0/86400",
+                    (start, end),
+                )
+            )
+            for offset in range(0, len(ids), 400):
+                batch = ids[offset : offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                objects.extend(
+                    self._row_to_knowledge_object(row)
+                    for row in conn.execute(
+                        f"SELECT {_SELECT_COLUMNS} FROM knowledge_objects "
+                        f"WHERE deleted_at IS NULL AND id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                )
+                collect(conn.execute(analysis_sql + f" a.knowledge_id IN ({placeholders})", batch))
+            run = conn.execute(
+                "SELECT payload_json FROM trend_runs WHERE week = ?", (week,)
+            ).fetchone()
+            trends = conn.execute(
+                "SELECT payload_json FROM trend_snapshots WHERE week = ?", (week,)
+            ).fetchall()
+            return {
+                "objects": objects,
+                "analyses": list(analyses.values()),
+                "trend_run": json.loads(run[0]) if run else None,
+                "trends": [json.loads(row[0]) for row in trends],
+            }
+
+    def save_importance_scores(self, records: list[dict[str, Any]]) -> None:
+        """Upsert the whole batch atomically; reject deleted IDs and stale writes."""
+        self._check_circuit()
+        if not records:
+            return
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for record in records:
+                identity = record["knowledge_id"]
+                if not conn.execute(
+                    "SELECT 1 FROM knowledge_objects WHERE id = ? AND deleted_at IS NULL",
+                    (identity,),
+                ).fetchone():
+                    raise LookupError(f"Knowledge item no longer exists: {identity}")
+                old = conn.execute(
+                    "SELECT computed_at FROM importance_scores WHERE knowledge_id = ?", (identity,)
+                ).fetchone()
+                if old and datetime.fromisoformat(old[0]) > datetime.fromisoformat(
+                    record["computed_at"]
+                ):
+                    raise ValueError("Cannot overwrite a newer importance score")
+                conn.execute(
+                    """
+                    INSERT INTO importance_scores (knowledge_id, computed_at, final_score,
+                        components_json, llm_adjusted, llm_score, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(knowledge_id) DO UPDATE SET
+                        computed_at=excluded.computed_at, final_score=excluded.final_score,
+                        components_json=excluded.components_json,
+                        llm_adjusted=excluded.llm_adjusted,
+                        llm_score=excluded.llm_score, payload_json=excluded.payload_json
+                    """,
+                    (
+                        identity,
+                        record["computed_at"],
+                        record["final_score"],
+                        json.dumps(record["components"], allow_nan=False),
+                        int(record["llm_adjusted"]),
+                        record["llm_score"],
+                        json.dumps(record, ensure_ascii=False, allow_nan=False),
+                    ),
+                )
+
+    def get_importance_score(self, knowledge_id: str) -> dict[str, Any] | None:
+        """Return the latest saved score only while its knowledge item is live."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT s.payload_json FROM importance_scores s JOIN knowledge_objects k "
+                    "ON k.id = s.knowledge_id WHERE k.id = ? AND k.deleted_at IS NULL",
+                    (knowledge_id,),
+                )
+                .fetchone()
+            )
+            return json.loads(row[0]) if row else None
+
     def query_trend_items(self, start: str, end: str) -> list[dict[str, Any]]:
         """Read live analyzed items in [start, end) by first persistence.
 
@@ -1430,7 +1554,7 @@ class SQLiteKnowledgeStore:
                         )
                         continue
 
-                    existing_id, existing_hash = existing
+                    existing_id, existing_hash, existing_stars = existing
 
                     if existing_hash != obj.content_hash:
                         self._update_object(conn, existing_id, obj)
@@ -1440,6 +1564,13 @@ class SQLiteKnowledgeStore:
                             existing_id,
                             obj.external_id,
                         )
+                    elif obj.github_stars is not None and obj.github_stars != existing_stars:
+                        conn.execute(
+                            "UPDATE knowledge_objects SET github_stars = ?, updated_at = ? "
+                            "WHERE id = ?",
+                            (obj.github_stars, datetime.now(timezone.utc).isoformat(), existing_id),
+                        )
+                        updated += 1
                     else:
                         skipped += 1
                         logger.debug(
@@ -1466,15 +1597,15 @@ class SQLiteKnowledgeStore:
         source_type: str,
         source_name: str,
         external_id: str,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, int | None] | None:
         """Find existing record by identity triple.
 
         Returns:
-            Tuple of (id, content_hash), or None if not found.
+            Tuple of (id, content_hash, github_stars), or None if not found.
         """
         row = conn.execute(
             """
-            SELECT id, content_hash
+            SELECT id, content_hash, github_stars
             FROM knowledge_objects
             WHERE source_type = ? AND source_name = ? AND external_id = ?
             LIMIT 1
@@ -1485,7 +1616,7 @@ class SQLiteKnowledgeStore:
         if row is None:
             return None
 
-        return str(row[0]), str(row[1])
+        return str(row[0]), str(row[1]), row[2]
 
     def _insert_object(self, conn: sqlite3.Connection, obj: KnowledgeObject) -> None:
         """Insert a new KnowledgeObject."""
@@ -1507,9 +1638,10 @@ class SQLiteKnowledgeStore:
                 updated_at,
                 parser_version,
                 normalizer_version,
-                extractor_version
+                extractor_version,
+                github_stars
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 obj.id,
@@ -1528,6 +1660,7 @@ class SQLiteKnowledgeStore:
                 obj.parser_version,
                 obj.normalizer_version,
                 obj.extractor_version,
+                obj.github_stars,
             ),
         )
 
@@ -1553,7 +1686,8 @@ class SQLiteKnowledgeStore:
                 updated_at = ?,
                 parser_version = ?,
                 normalizer_version = ?,
-                extractor_version = ?
+                extractor_version = ?,
+                github_stars = COALESCE(?, github_stars)
             WHERE id = ?
             """,
             (
@@ -1567,6 +1701,7 @@ class SQLiteKnowledgeStore:
                 obj.parser_version,
                 obj.normalizer_version,
                 obj.extractor_version,
+                obj.github_stars,
                 existing_id,
             ),
         )
@@ -1590,6 +1725,7 @@ class SQLiteKnowledgeStore:
             parser_version=row[13],
             normalizer_version=row[14],
             extractor_version=row[15],
+            github_stars=row[16],
             embedding_vector=None,
             vector_db_id=None,
         )

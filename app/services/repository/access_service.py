@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         ObservedKnowledgeItem,
         PatternSnapshot,
     )
+    from app.services.importance.models import ImportanceInputs, ImportanceScore
     from app.services.trend.models import TrendRun, TrendSnapshot
 
 logger = get_logger(__name__)
@@ -283,6 +284,69 @@ class RepositoryAccessService:
     # ------------------------------------------------------------------
     # Trend Identification
     # ------------------------------------------------------------------
+
+    def load_importance_inputs(
+        self, knowledge_ids: list[str], start: datetime, end: datetime, week: str
+    ) -> "ImportanceInputs":
+        """Read scoring evidence once, keeping missing and empty history explicit."""
+        from app.services.importance.models import ImportanceInputs
+        from app.services.trend.models import week_start
+
+        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+            raise ValueError("Expected an ordered timezone-aware scoring interval")
+        if week_start(week) + timedelta(days=7) > end:
+            raise ValueError("Trend context must be a completed UTC week")
+        data = self._store.load_importance_inputs(
+            knowledge_ids, start.isoformat(), end.isoformat(), week
+        )
+        wanted = set(knowledge_ids)
+        parsed = []
+        for row in data["analyses"]:
+            value = dict(row)
+            at = datetime.fromisoformat(value["analyzed_at"])
+            if value["knowledge_id"] not in wanted and not start <= at <= end:
+                continue
+            for key in ("themes", "entities", "key_claims"):
+                value[key] = json.loads(value.pop(f"{key}_json"))
+            parsed.append(value)
+        data["analyses"] = parsed
+        result = ImportanceInputs.model_validate(data)
+        run, trends = result.trend_run, result.trends
+        if run is None:
+            if trends:
+                raise ValueError("Trend snapshots have no run metadata")
+        elif (
+            run.week != week
+            or run.computed_at > end
+            or run.snapshot_count != len(trends)
+            or len({row.trend_id for row in trends}) != len(trends)
+            or any(
+                row.week != week
+                or row.computed_at != run.computed_at
+                or row.baseline_week != run.baseline_week
+                or row.current_count > run.current_items
+                or row.baseline_count > run.baseline_items
+                for row in trends
+            )
+        ):
+            raise ValueError("Inconsistent or future trend context")
+        return result
+
+    def save_importance_scores(self, scores: list["ImportanceScore"]) -> None:
+        """Validate every score before issuing one atomic store operation."""
+        from app.services.importance.models import ImportanceScore
+
+        validated = [ImportanceScore.model_validate(score.model_dump()) for score in scores]
+        if len({score.knowledge_id for score in validated}) != len(validated):
+            raise ValueError("Duplicate knowledge_id in importance batch")
+        self._store.save_importance_scores([score.model_dump(mode="json") for score in validated])
+
+    def get_importance_score(self, knowledge_id: str) -> "ImportanceScore | None":
+        """Read a saved score; None means no score for a live knowledge item."""
+        from app.services.importance.models import ImportanceScore
+
+        row = self._store.get_importance_score(knowledge_id)
+        return ImportanceScore.model_validate(row) if row is not None else None
 
     def list_trend_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
         """Read live analyzed items in [start, end), anchored to first persistence."""

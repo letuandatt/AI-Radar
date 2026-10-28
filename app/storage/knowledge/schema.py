@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS knowledge_objects (
     parser_version TEXT DEFAULT '1.0.0',
     normalizer_version TEXT DEFAULT '1.0.0',
     extractor_version TEXT DEFAULT '1.0.0',
+    github_stars INTEGER CHECK (github_stars IS NULL OR github_stars >= 0),
     deleted_at TIMESTAMP NULL DEFAULT NULL
 );
 """
@@ -227,10 +228,27 @@ CREATE INDEX IF NOT EXISTS idx_trend_history ON trend_snapshots(trend_id, week);
 """
 
 # =============================================================================
+# Importance scores
+# =============================================================================
+
+CREATE_IMPORTANCE_SCORES_TABLE = """
+CREATE TABLE IF NOT EXISTS importance_scores (
+    knowledge_id TEXT PRIMARY KEY REFERENCES knowledge_objects(id) ON DELETE CASCADE,
+    computed_at TEXT NOT NULL,
+    final_score REAL NOT NULL CHECK (final_score BETWEEN 0 AND 1),
+    components_json TEXT NOT NULL,
+    llm_adjusted INTEGER NOT NULL CHECK (llm_adjusted IN (0, 1)),
+    llm_score REAL CHECK (llm_score IS NULL OR llm_score BETWEEN 0 AND 1),
+    payload_json TEXT NOT NULL
+);
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_IMPORTANCE_SCORES_TABLE,
     CREATE_TREND_RUNS_TABLE,
     CREATE_TREND_SNAPSHOTS_TABLE,
     IDX_TREND_HISTORY,
