@@ -244,10 +244,44 @@ CREATE TABLE IF NOT EXISTS importance_scores (
 """
 
 # =============================================================================
+# Daily insights
+# =============================================================================
+
+CREATE_INSIGHT_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS insight_runs (
+    report_date TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+"""
+
+CREATE_INSIGHTS_TABLE = """
+CREATE TABLE IF NOT EXISTS insights (
+    insight_id TEXT PRIMARY KEY,
+    report_date TEXT NOT NULL REFERENCES insight_runs(report_date),
+    insight_type TEXT NOT NULL CHECK (insight_type IN ('trend','pattern','connection','warning')),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    citations_json TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+    generated_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+"""
+
+IDX_INSIGHTS_DATE = """
+CREATE INDEX IF NOT EXISTS idx_insights_date ON insights(report_date, insight_type);
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_INSIGHT_RUNS_TABLE,
+    CREATE_INSIGHTS_TABLE,
+    IDX_INSIGHTS_DATE,
     CREATE_IMPORTANCE_SCORES_TABLE,
     CREATE_TREND_RUNS_TABLE,
     CREATE_TREND_SNAPSHOTS_TABLE,
