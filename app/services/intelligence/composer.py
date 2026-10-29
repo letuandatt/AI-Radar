@@ -1,4 +1,4 @@
-"""Compose an unrefined report using saved insights and current persisted inputs."""
+"""Compose cited, structured reports that can be refined without parsing Markdown."""
 
 import json
 from collections.abc import Callable
@@ -11,14 +11,15 @@ from app.prompts.builder import PromptBuilder
 from app.prompts.loader import PromptLoader
 from app.services.intelligence.context import (
     displayed_trends,
-    links,
     load_day,
     load_ranking,
-    plain,
     resolve_citation,
+    sync_section,
     unique_citations,
 )
 from app.services.intelligence.models import (
+    Citation,
+    ContentBlock,
     ExecutiveSummary,
     IntelligenceDocument,
     IntelligenceMetadata,
@@ -31,11 +32,10 @@ logger = get_logger(__name__)
 
 
 class IntelligenceComposer:
-    """Sync API used by the local runner; async callers must use to_thread.
+    """Sync composition API; async callers must offload the whole call.
 
-    Composition does not generate insights or rerun upstream analysis/scoring.
-    It combines the saved daily insights with current saved scores/trends. Source
-    drift on a saved insight is an error requiring regeneration, not a silent edit.
+    Blocks retain prose-to-source mapping. Trend tables and score facts are
+    rendered by code and remain fixed during refinement. No upstream jobs run.
     """
 
     def __init__(
@@ -52,7 +52,7 @@ class IntelligenceComposer:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def compose(self, date: str) -> IntelligenceDocument:
-        """Return four cited sections; missing runs fail, successful empty runs do not."""
+        """Compose four sections with explicit empty states and immutable source facts."""
         now = self._clock()
         logger.info("Intelligence composition START: date=%s", date)
         day = load_day(self._access, date, now)
@@ -60,18 +60,28 @@ class IntelligenceComposer:
         if run is None:
             raise LookupError(f"No insight run for {date}; run insight generation first")
         ranking = load_ranking(self._access, date, now)
-        selected = saved[:5]  # Repository order: confidence descending, then ID.
+        selected = saved[:5]
         for insight in selected:
             for citation in insight.citations:
                 if resolve_citation(self._access, citation.knowledge_id) != citation:
                     raise ValueError("Saved insight source changed; regenerate insights")
         notable = day.candidates[:10]
         notable_citations = [resolve_citation(self._access, row.item.id) for row in notable]
-        summary_sources = unique_citations(
+        sources = unique_citations(
             [citation for insight in selected for citation in insight.citations] + notable_citations
         )
-        allowed = {row.knowledge_id: row for row in summary_sources}
-        summary_citations = []
+        allowed = {row.knowledge_id: row for row in sources}
+        trend_rows = displayed_trends(ranking)
+        trend_citations: list[Citation] = []
+        for trend in trend_rows:
+            if not trend.sample_knowledge_ids:
+                raise LookupError(f"No saved sample evidence for trend: {trend.trend_id}")
+            trend_citations.extend(
+                resolve_citation(self._access, key) for key in trend.sample_knowledge_ids
+            )
+        trend_citations = unique_citations(trend_citations)
+        document_id = str(uuid4())
+        summary_blocks = []
         if allowed:
             payload = {
                 "report_date": date,
@@ -103,81 +113,106 @@ class IntelligenceComposer:
             )
             output = self._provider.structured_chat(prompt, ExecutiveSummary)
             summary = ExecutiveSummary.model_validate(output.model_dump())
-            paragraphs = []
-            for sentence in summary.sentences:
+            for index, sentence in enumerate(summary.sentences):
                 if not set(sentence.evidence_ids) <= allowed.keys():
                     raise ValueError("Summary selected unknown evidence IDs")
-                citations = [allowed[key] for key in sentence.evidence_ids]
-                summary_citations.extend(citations)
-                paragraphs.append(f"{plain(sentence.text)} {links(citations)}")
-            summary_text = " ".join(paragraphs)
+                summary_blocks.append(
+                    ContentBlock(
+                        block_id=f"{document_id}:summary:{index}",
+                        kind="prose",
+                        text=sentence.text,
+                        evidence_ids=sentence.evidence_ids,
+                    )
+                )
         else:
-            summary_text = (
-                "No daily candidates or saved insights are available for this report. "
-                "The insight generation run completed successfully with an empty result. "
-                "This does not establish complete ingestion or absence of real-world activity."
+            summary_blocks.append(
+                ContentBlock(
+                    block_id=f"{document_id}:summary:empty",
+                    kind="notice",
+                    text="No daily candidates or saved insights are available for this report. "
+                    "Insight generation completed successfully with an empty result. "
+                    "This does not establish complete ingestion or absence of real-world activity.",
+                )
             )
-        trend_rows = displayed_trends(ranking)
-        trend_citations = []
-        trend_evidence = []
-        for trend in trend_rows:
-            citations = [resolve_citation(self._access, key) for key in trend.sample_knowledge_ids]
-            trend_citations.extend(citations)
-            trend_evidence.append(
-                f"- {plain(trend.name)}: {links(citations) or 'No saved sample sources.'}"
+        trend_blocks = [
+            ContentBlock(
+                block_id=f"{document_id}:trends",
+                kind="fixed" if trend_rows else "notice",
+                text=TrendRanker.generate_summary_markdown(ranking),
+                evidence_ids=[row.knowledge_id for row in trend_citations],
+                trend_ids=[row.trend_id for row in trend_rows],
             )
-        trend_text = TrendRanker.generate_summary_markdown(ranking)
-        if trend_evidence:
-            trend_text += "\n### Saved sample sources\n\n" + "\n".join(trend_evidence)
-        key_text = (
-            "\n\n".join(
-                f"### {plain(row.title)}\n\n{plain(row.description)}\n\n{links(row.citations)}"
-                for row in selected
+        ]
+        key_blocks = [
+            ContentBlock(
+                block_id=f"{document_id}:insight:{row.insight_id}",
+                kind="prose",
+                title=row.title,
+                text=row.description,
+                evidence_ids=row.evidence_ids,
+                insight_id=row.insight_id,
             )
-            or "No evidence-backed insights were produced by the successful generation run."
-        )
-        notable_text = (
-            "\n".join(
-                f"- {links([citation])} — importance {row.score.final_score:.3f}; "
-                f"score computed {row.score.computed_at.isoformat()}. "
-                f"{plain(row.item.metadata.summary[:1000])}"
-                for row, citation in zip(notable, notable_citations, strict=True)
+            for row in selected
+        ] or [
+            ContentBlock(
+                block_id=f"{document_id}:insights:empty",
+                kind="notice",
+                text="No evidence-backed insights were produced by the successful generation run.",
             )
-            or "No scored items in this UTC fetched_at cohort."
-        )
-        document_id = str(uuid4())
+        ]
+        notable_blocks = [
+            ContentBlock(
+                block_id=f"{document_id}:item:{row.item.id}",
+                kind="prose",
+                text=row.item.metadata.summary[:1000] or "No saved summary.",
+                facts=f"Importance {row.score.final_score:.3f}; "
+                f"score computed {row.score.computed_at.isoformat()}.",
+                evidence_ids=[row.item.id],
+            )
+            for row in notable
+        ] or [
+            ContentBlock(
+                block_id=f"{document_id}:notable:empty",
+                kind="notice",
+                text="No scored items in this UTC fetched_at cohort.",
+            )
+        ]
         sections = [
             IntelligenceSection(
                 section_id=f"{document_id}:summary",
                 section_type="executive_summary",
                 title="Executive Summary",
-                content=summary_text,
-                citations=unique_citations(summary_citations),
+                content="Pending render.",
+                citations=sources,
+                blocks=summary_blocks,
             ),
             IntelligenceSection(
                 section_id=f"{document_id}:trends",
                 section_type="top_trends",
                 title="Top Trends",
-                content=trend_text,
-                citations=unique_citations(trend_citations),
-                trend_ids=[row.trend_id for row in trend_rows],
+                content="Pending render.",
+                citations=trend_citations,
+                blocks=trend_blocks,
             ),
             IntelligenceSection(
                 section_id=f"{document_id}:insights",
                 section_type="key_insights",
                 title="Key Insights",
-                content=key_text,
+                content="Pending render.",
                 insights=selected,
                 citations=unique_citations([c for row in selected for c in row.citations]),
+                blocks=key_blocks,
             ),
             IntelligenceSection(
                 section_id=f"{document_id}:notable",
                 section_type="notable_items",
                 title="Notable Items",
-                content=notable_text,
+                content="Pending render.",
                 citations=notable_citations,
+                blocks=notable_blocks,
             ),
         ]
+        sections = [sync_section(section) for section in sections]
         if self._access.read_insight_report(date) != (run, saved):
             raise RuntimeError("Insight report changed during composition; retry")
         for citation in unique_citations([c for section in sections for c in section.citations]):

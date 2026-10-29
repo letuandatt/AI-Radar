@@ -148,6 +148,52 @@ class ExecutiveSummary(Contract):
     sentences: list[SummarySentence] = Field(min_length=3, max_length=5)
 
 
+class ContentBlock(Contract):
+    """Editable prose or code-rendered fixed/context text with explicit provenance.
+
+    facts/title and all identities are immutable during refinement. fixed blocks
+    contain trusted Composer Markdown (weekly tables); notice blocks only explain
+    empty states and must not carry claims about individual sources or trends.
+    """
+
+    block_id: str = Field(min_length=1)
+    kind: Literal["prose", "fixed", "notice"]
+    text: str = Field(min_length=1)
+    title: str = ""
+    facts: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+    insight_id: str | None = None
+    trend_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_support(self) -> "ContentBlock":
+        """Only explicit empty-state notices may omit source references."""
+        for values in (self.evidence_ids, self.trend_ids):
+            if len(values) != len(set(values)) or any(not value.strip() for value in values):
+                raise ValueError("Block references must be unique and nonempty")
+        if self.kind == "notice":
+            if self.evidence_ids or self.insight_id or self.trend_ids:
+                raise ValueError("Notices cannot carry evidence or signal identities")
+        elif not self.evidence_ids:
+            raise ValueError("A content block requires citations")
+        return self
+
+
+class RefinementEdit(Contract):
+    """The LLM may replace prose only; evidence membership must remain unchanged."""
+
+    block_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class RefinementOutput(Contract):
+    """Unresolved factual/coherence issues cause the entire refinement to fail."""
+
+    edits: list[RefinementEdit]
+    issues: list[str] = Field(default_factory=list, max_length=10)
+
+
 class IntelligenceSection(Contract):
     """Markdown with explicit supporting objects; empty states have no citations."""
 
@@ -158,6 +204,7 @@ class IntelligenceSection(Contract):
     insights: list[Insight] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     trend_ids: list[str] = Field(default_factory=list)
+    blocks: list[ContentBlock] = Field(default_factory=list)
 
 
 class IntelligenceMetadata(Contract):
@@ -183,13 +230,19 @@ class IntelligenceMetadata(Contract):
 
 
 class IntelligenceDocument(Contract):
-    """An unrefined four-section report; length optimization belongs to refinement."""
+    """A four-section report; original insight records remain as provenance.
+
+    generated_at is composition time; refined_at records a successful refinement.
+    Legacy documents without blocks can still be loaded, but must be recomposed
+    before refinement. The 1999-word ceiling is checked on rendered Markdown.
+    """
 
     document_id: str
     date: str
     generated_at: AwareDatetime
     sections: list[IntelligenceSection]
     metadata: IntelligenceMetadata
+    refined_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_document(self) -> "IntelligenceDocument":
@@ -209,6 +262,11 @@ class IntelligenceDocument(Contract):
             raise ValueError("Insight report date does not match document")
         if self.metadata != IntelligenceMetadata.from_sections(self.sections):
             raise ValueError("Metadata must match displayed sections")
+        if self.refined_at is not None:
+            if self.refined_at < self.generated_at:
+                raise ValueError("Refinement cannot precede composition")
+            if len(self.to_markdown().split()) >= 2000:
+                raise ValueError("Refined document must contain fewer than 2000 words")
         return self
 
     def to_markdown(self) -> str:
