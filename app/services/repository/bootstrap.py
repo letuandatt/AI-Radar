@@ -223,3 +223,15 @@ def create_importance_service(initializer: RepositoryInitializer, llm_chain, set
     return ImportanceScorer(
         RepositoryAccessService(initializer.sqlite_store), llm_chain, settings.importance
     )
+
+
+def create_intelligence_service(initializer: RepositoryInitializer, llm_chain):
+    """Wire insight generation to the existing repository and shared LLM chain.
+
+    Construction performs no provider call or report generation. Composition is
+    exposed separately through IntelligenceComposer and its local runner.
+    """
+    from app.services.intelligence.insight_generator import InsightGenerator
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return InsightGenerator(RepositoryAccessService(initializer.sqlite_store), llm_chain)
