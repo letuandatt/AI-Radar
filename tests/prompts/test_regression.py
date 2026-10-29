@@ -17,6 +17,7 @@ PROMPTS = [
     "importance/score_refinement",
     "intelligence/insight_generation",
     "intelligence/composition",
+    "intelligence/refinement",
 ]
 
 

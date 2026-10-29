@@ -125,3 +125,22 @@ def test_untrusted_text_cannot_create_markdown_links(environment):
     assert "[Fake](https://evil.test)" not in content
     assert "<script>" not in content
     assert "](https://example.com/ko-0)" in content
+
+
+def test_blocks_round_trip_and_render_match_sections(environment):
+    from app.services.intelligence.context import render_section
+    from app.services.intelligence.models import IntelligenceDocument
+
+    document = composer(environment).compose(DAY)
+    restored = IntelligenceDocument.model_validate_json(document.model_dump_json())
+    assert restored == document
+    ids = []
+    for section in restored.sections:
+        assert section.blocks
+        assert render_section(section) == section.content
+        ids.extend(block.block_id for block in section.blocks)
+        for block in section.blocks:
+            if block.kind != "notice":
+                assert block.evidence_ids
+    assert len(ids) == len(set(ids))
+    assert restored.sections[1].blocks[0].kind == "fixed"
