@@ -344,6 +344,29 @@ def _shutdown_digest(service) -> None:
     logger.debug("Digest service shutdown (no-op)")
 
 
+def _init_web():
+    """Start the optional web adapter after all of its dependencies."""
+    from app.api.bootstrap import start_web
+    from app.api.config import WebConfig
+
+    config = WebConfig()
+    if not config.enabled:
+        return None
+    assert _registry is not None
+    return start_web(
+        _registry.get_component("repository"),
+        _registry.get_component("app_service"),
+        _registry.get_component("retrieval"),
+        config,
+    )
+
+
+def _shutdown_web(server) -> None:
+    """Drain HTTP work before the registry shuts down repository services."""
+    if server is not None:
+        server.stop()
+
+
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
     global _registry
@@ -383,6 +406,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
         _registry.register("importance", _init_importance, _shutdown_importance, priority=43)
         _registry.register("intelligence", _init_intelligence, _shutdown_intelligence, priority=44)
         _registry.register("digest", _init_digest, _shutdown_digest, priority=45)
+        _registry.register("web", _init_web, _shutdown_web, priority=70)
 
         # Start all components
         _registry.start_all()
