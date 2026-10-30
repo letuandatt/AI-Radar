@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>AI-Radar Digest</title></head>
+<body style="font-family:Arial,sans-serif;line-height:1.6;max-width:760px;margin:auto">
+<h1>AI-Radar · {{ digest.digest_date }}</h1>
+<p>{{ digest.total_items }} selected items · UTC publication day</p>
+{% for section in digest.sections %}
+<h2>{{ section.section_title }}</h2>
+{% for item in section.items %}
+<h3><a href="{{ item.source_url }}">{{ item.title }}</a></h3>
+<p>{{ item.summary }}</p>
+<p>{{ item.source_name }} · Importance {{ '%.2f' | format(item.importance_score) }}</p>
+{% endfor %}
+{% else %}<p>No items met the selection policy for this day.</p>{% endfor %}
+<h2>Daily intelligence</h2>
+{% for section in digest.intelligence.sections %}
+<h3>{{ section.title }}</h3>
+<div style="white-space:pre-wrap">{{ section.content }}</div>
+<ul>{% for citation in section.citations %}
+<li><a href="{{ citation.source_url }}">{{ citation.title }}</a></li>
+{% endfor %}</ul>
+{% endfor %}
+</body></html>

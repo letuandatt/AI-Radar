@@ -1,0 +1,19 @@
+AI-Radar · {{ digest.digest_date }}
+{{ digest.total_items }} selected items · UTC publication day
+{% for section in digest.sections %}
+{{ section.section_title }}
+{% for item in section.items %}
+- {{ item.title }}
+  {{ item.summary }}
+  {{ item.source_name }} · Importance {{ '%.2f' | format(item.importance_score) }}
+  {{ item.source_url }}
+{% endfor %}
+{% else %}No items met the selection policy for this day.
+{% endfor %}
+Daily intelligence
+{% for section in digest.intelligence.sections %}
+{{ section.title }}
+{{ section.content }}
+{% for citation in section.citations %}- {{ citation.title }}: {{ citation.source_url }}
+{% endfor %}
+{% endfor %}
