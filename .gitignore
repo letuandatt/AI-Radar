@@ -11,6 +11,9 @@ working/
 scripts/kaggle
 
 app/storage/knowledge/knowledge.db
+app/storage/knowledge/knowledge.db-shm
+app/storage/knowledge/knowledge.db-wal
+app/storage/scheduler_state.json
 app/storage/search/bm25_index.pkl
 
 __pycache__/
