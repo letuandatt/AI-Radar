@@ -31,6 +31,7 @@ from ..services.repository import (
 from ..services.repository.bootstrap import (
     create_analysis_service,
     create_importance_service,
+    create_intelligence_service,
     create_llm_chain,
     create_trend_service,
 )
@@ -318,6 +319,19 @@ def _shutdown_importance(service) -> None:
     logger.debug("Importance service shutdown (no-op)")
 
 
+def _init_intelligence():
+    """Register generation without running it; reuse the application LLM budget."""
+    assert _registry is not None, "ComponentRegistry must be initialized"
+    return create_intelligence_service(
+        _registry.get_component("repository"), _registry.get_component("llm_chain")
+    )
+
+
+def _shutdown_intelligence(service) -> None:
+    """Intelligence owns no independent resources."""
+    logger.debug("Intelligence service shutdown (no-op)")
+
+
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
     global _registry
@@ -355,6 +369,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
         _registry.register("acquisition", _init_acquisition, _shutdown_acquisition, priority=40)
         _registry.register("trend", _init_trend, _shutdown_trend, priority=42)
         _registry.register("importance", _init_importance, _shutdown_importance, priority=43)
+        _registry.register("intelligence", _init_intelligence, _shutdown_intelligence, priority=44)
 
         # Start all components
         _registry.start_all()

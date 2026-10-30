@@ -1044,6 +1044,145 @@ class SQLiteKnowledgeStore:
     # Identify trend
     # =============================================================================
 
+    def load_intelligence_inputs(self, start: str, end: str) -> dict[str, Any]:
+        """Read one UTC fetched cohort, saved prerequisites and recent patterns.
+
+        The SQL guard band is trimmed with exact datetime comparisons before
+        limiting to 30 ranked candidates. Missing prerequisites fail explicitly.
+        Reads share one SQLite transaction; no service models enter storage.
+        """
+        self._check_circuit()
+        lower, upper = datetime.fromisoformat(start), datetime.fromisoformat(end)
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            rows = conn.execute(
+                "SELECT k.id, k.fetched_at, s.final_score, a.knowledge_id "
+                "FROM knowledge_objects k "
+                "LEFT JOIN importance_scores s ON s.knowledge_id = k.id "
+                "LEFT JOIN content_analyses a ON a.knowledge_id = k.id "
+                "WHERE k.deleted_at IS NULL AND julianday(k.fetched_at) "
+                "BETWEEN julianday(?) - 1.0/86400 AND julianday(?) + 1.0/86400 "
+                "ORDER BY s.final_score DESC, k.id",
+                (start, end),
+            ).fetchall()
+            selected: list[str] = []
+            total = 0
+            for identity, fetched, score, analysis_id in rows:
+                instant = datetime.fromisoformat(fetched)
+                if instant.utcoffset() is None:
+                    instant = instant.replace(tzinfo=timezone.utc)
+                if not lower <= instant < upper:
+                    continue
+                total += 1
+                if score is None or analysis_id is None:
+                    raise LookupError(f"Missing saved analysis or importance score: {identity}")
+                if len(selected) < 30:
+                    selected.append(identity)
+            candidates = []
+            for identity in selected:
+                obj = self._row_to_knowledge_object(
+                    conn.execute(
+                        f"SELECT {_SELECT_COLUMNS} FROM knowledge_objects WHERE id = ?", (identity,)
+                    ).fetchone()
+                )
+                cursor = conn.execute(
+                    "SELECT knowledge_id, analyzed_at, themes_json, entities_json, sentiment, "
+                    "key_claims_json, technical_depth, confidence FROM content_analyses "
+                    "WHERE knowledge_id = ?",
+                    (identity,),
+                )
+                analysis = dict(
+                    zip([column[0] for column in cursor.description], cursor.fetchone())
+                )
+                for key in ("themes", "entities", "key_claims"):
+                    analysis[key] = json.loads(analysis.pop(f"{key}_json"))
+                score_row = conn.execute(
+                    "SELECT payload_json FROM importance_scores WHERE knowledge_id = ?", (identity,)
+                ).fetchone()
+                candidates.append(
+                    {"item": obj, "analysis": analysis, "score": json.loads(score_row[0])}
+                )
+            patterns = conn.execute(
+                "SELECT payload_json, updated_at FROM discovered_patterns "
+                "ORDER BY julianday(updated_at) DESC, pattern_id LIMIT 10"
+            ).fetchall()
+            return {
+                "total_items": total,
+                "candidates": candidates,
+                "patterns": [dict(json.loads(row[0]), observed_at=row[1]) for row in patterns],
+            }
+
+    def save_insights(self, records: list[dict[str, Any]], run: dict[str, Any]) -> None:
+        """Atomically replace a report day, checking live citations and stale runs."""
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute(
+                "SELECT started_at FROM insight_runs WHERE report_date = ?", (run["report_date"],)
+            ).fetchone()
+            if old and datetime.fromisoformat(old[0]) > datetime.fromisoformat(run["started_at"]):
+                raise ValueError("Cannot replace a newer insight run")
+            for record in records:
+                for citation in record["citations"]:
+                    live = conn.execute(
+                        "SELECT title, source_url, metadata_json FROM knowledge_objects "
+                        "WHERE id = ? AND deleted_at IS NULL",
+                        (citation["knowledge_id"],),
+                    ).fetchone()
+                    if live is None:
+                        raise LookupError(f"Citation no longer exists: {citation['knowledge_id']}")
+                    if (live[0], live[1], json.loads(live[2])["relevance_score"]) != (
+                        citation["title"],
+                        citation["source_url"],
+                        citation["relevance_score"],
+                    ):
+                        raise ValueError("Citation source changed during generation; retry")
+            conn.execute(
+                "INSERT INTO insight_runs VALUES (?, ?, ?) ON CONFLICT(report_date) "
+                "DO UPDATE SET started_at=excluded.started_at, payload_json=excluded.payload_json",
+                (run["report_date"], run["started_at"], json.dumps(run, allow_nan=False)),
+            )
+            conn.execute("DELETE FROM insights WHERE report_date = ?", (run["report_date"],))
+            conn.executemany(
+                "INSERT INTO insights VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        row["insight_id"],
+                        row["report_date"],
+                        row["insight_type"],
+                        row["title"],
+                        row["description"],
+                        json.dumps(row["evidence_ids"]),
+                        json.dumps(row["citations"]),
+                        row["confidence"],
+                        row["generated_at"],
+                        json.dumps(row, allow_nan=False),
+                    )
+                    for row in records
+                ],
+            )
+
+    def read_insight_report(self, date: str | None = None) -> dict[str, Any]:
+        """Read run and insights atomically; omitted date means latest successful day."""
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            if date is None:
+                latest = conn.execute("SELECT MAX(report_date) FROM insight_runs").fetchone()[0]
+                date = latest
+            run = conn.execute(
+                "SELECT payload_json FROM insight_runs WHERE report_date = ?", (date,)
+            ).fetchone()
+            rows = conn.execute(
+                "SELECT payload_json FROM insights WHERE report_date = ? "
+                "ORDER BY confidence DESC, insight_id",
+                (date,),
+            ).fetchall()
+            return {
+                "run": json.loads(run[0]) if run else None,
+                "insights": [json.loads(row[0]) for row in rows],
+            }
+
     def load_importance_inputs(
         self, ids: list[str], start: str, end: str, week: str
     ) -> dict[str, Any]:

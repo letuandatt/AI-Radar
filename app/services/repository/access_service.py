@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         PatternSnapshot,
     )
     from app.services.importance.models import ImportanceInputs, ImportanceScore
+    from app.services.intelligence.models import Insight, InsightRun
     from app.services.trend.models import TrendRun, TrendSnapshot
 
 logger = get_logger(__name__)
@@ -284,6 +285,68 @@ class RepositoryAccessService:
     # ------------------------------------------------------------------
     # Trend Identification
     # ------------------------------------------------------------------
+
+    def load_intelligence_inputs(self, date: str) -> dict[str, Any]:
+        """Load a bounded daily cohort and current saved S19/S21 prerequisites."""
+        from app.services.intelligence.models import day_start
+
+        start = day_start(date)
+        return self._store.load_intelligence_inputs(
+            start.isoformat(), (start + timedelta(days=1)).isoformat()
+        )
+
+    def save_insights(self, insights: list["Insight"], *, run: "InsightRun") -> None:
+        """Validate the complete replacement, including an explicit empty run."""
+        from app.services.intelligence.models import Insight, InsightRun
+
+        run = InsightRun.model_validate(run.model_dump())
+        rows = [Insight.model_validate(row.model_dump()) for row in insights]
+        if run.insight_count != len(rows) or len({row.insight_id for row in rows}) != len(rows):
+            raise ValueError("Insight count/identities do not match run")
+        if any(
+            row.report_date != run.report_date or row.generated_at != run.generated_at
+            for row in rows
+        ):
+            raise ValueError("Insight does not match run metadata")
+        self._store.save_insights(
+            [row.model_dump(mode="json") for row in rows], run.model_dump(mode="json")
+        )
+
+    def read_insight_report(
+        self, date: str | None = None
+    ) -> tuple["InsightRun | None", list["Insight"]]:
+        """Read one coherent report; None selects the newest successful report day."""
+        from app.services.intelligence.models import Insight, InsightRun, day_start
+
+        if date is not None:
+            day_start(date)
+        data = self._store.read_insight_report(date)
+        run = InsightRun.model_validate(data["run"]) if data["run"] is not None else None
+        rows = [Insight.model_validate(row) for row in data["insights"]]
+        if (run is None and rows) or (
+            run is not None
+            and (
+                run.insight_count != len(rows)
+                or any(
+                    row.report_date != run.report_date or row.generated_at != run.generated_at
+                    for row in rows
+                )
+            )
+        ):
+            raise ValueError("Inconsistent insight report")
+        return run, rows
+
+    def list_insights(self, date: str, insight_type: str | None = None) -> list["Insight"]:
+        """List saved insights; use read_insight_report to distinguish empty/missing."""
+        if insight_type is not None and insight_type not in {
+            "trend",
+            "pattern",
+            "connection",
+            "warning",
+        }:
+            raise ValueError("Unknown insight type")
+        _, rows = self.read_insight_report(date)
+        return [row for row in rows if insight_type is None or row.insight_type == insight_type]
 
     def load_importance_inputs(
         self, knowledge_ids: list[str], start: datetime, end: datetime, week: str
