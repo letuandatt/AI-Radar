@@ -28,6 +28,7 @@ def isolate_external_components(monkeypatch):
         "trend",
         "importance",
         "intelligence",
+        "digest",
     ):
         monkeypatch.setattr(application, f"_init_{name}", MagicMock())
         monkeypatch.setattr(application, f"_shutdown_{name}", MagicMock())
