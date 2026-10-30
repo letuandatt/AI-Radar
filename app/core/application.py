@@ -30,6 +30,7 @@ from ..services.repository import (
 )
 from ..services.repository.bootstrap import (
     create_analysis_service,
+    create_digest_service,
     create_importance_service,
     create_intelligence_service,
     create_llm_chain,
@@ -332,6 +333,17 @@ def _shutdown_intelligence(service) -> None:
     logger.debug("Intelligence service shutdown (no-op)")
 
 
+def _init_digest():
+    """Expose digest generation after intelligence; do not generate on startup."""
+    assert _registry is not None, "ComponentRegistry must be initialized"
+    return create_digest_service(_registry.get_component("repository"), get_settings())
+
+
+def _shutdown_digest(service) -> None:
+    """Digest owns no independent resources."""
+    logger.debug("Digest service shutdown (no-op)")
+
+
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
     global _registry
@@ -370,6 +382,7 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
         _registry.register("trend", _init_trend, _shutdown_trend, priority=42)
         _registry.register("importance", _init_importance, _shutdown_importance, priority=43)
         _registry.register("intelligence", _init_intelligence, _shutdown_intelligence, priority=44)
+        _registry.register("digest", _init_digest, _shutdown_digest, priority=45)
 
         # Start all components
         _registry.start_all()

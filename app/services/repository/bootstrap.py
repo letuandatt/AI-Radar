@@ -235,3 +235,15 @@ def create_intelligence_service(initializer: RepositoryInitializer, llm_chain):
     from app.services.repository.access_service import RepositoryAccessService
 
     return InsightGenerator(RepositoryAccessService(initializer.sqlite_store), llm_chain)
+
+
+def create_digest_service(initializer: RepositoryInitializer, settings: Settings):
+    """Wire deterministic digest generation without provider calls or startup work."""
+    from app.services.digest.config import DigestConfig
+    from app.services.digest.generator import DailyDigestGenerator
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return DailyDigestGenerator(
+        RepositoryAccessService(initializer.sqlite_store),
+        DigestConfig(importance=settings.importance),
+    )

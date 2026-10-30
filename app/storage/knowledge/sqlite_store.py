@@ -73,6 +73,10 @@ class SQLiteKnowledgeStore:
         This avoids SQLite API misuse when the store is shared across threads.
     """
 
+    # ------------------------------------------------------------------
+    # Initialization and Connection Lifecycle
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
         db_path: str | Path = "app/storage/knowledge/knowledge.db",
@@ -85,8 +89,18 @@ class SQLiteKnowledgeStore:
         self._index_manager = MetadataIndexManager()
         self._init_schema()
 
+    @property
+    def conn_manager(self):
+        """Return the ConnectionManager instance."""
+        return self._conn_manager
+
+    def close(self) -> None:
+        """Close the underlying database connection."""
+        with self._op_lock:
+            self._conn_manager.close()
+
     # ------------------------------------------------------------------
-    # Schema
+    # Schema Initialization and Analysis Identity
     # ------------------------------------------------------------------
 
     def _init_schema(self) -> None:
@@ -304,16 +318,6 @@ class SQLiteKnowledgeStore:
                 "SELECT COUNT(*) FROM knowledge_objects WHERE deleted_at IS NULL"
             ).fetchone()
             return int(row[0])
-
-    @property
-    def conn_manager(self):
-        """Return the ConnectionManager instance."""
-        return self._conn_manager
-
-    def close(self) -> None:
-        """Close the underlying database connection."""
-        with self._op_lock:
-            self._conn_manager.close()
 
     # ------------------------------------------------------------------
     # Metadata Index Operations
@@ -1040,9 +1044,82 @@ class SQLiteKnowledgeStore:
 
         return UpdateResult(updated=updated, skipped=skipped)
 
-    # =============================================================================
-    # Identify trend
-    # =============================================================================
+    # ------------------------------------------------------------------
+    # Refined Intelligence Documents
+    # ------------------------------------------------------------------
+
+    def save_intelligence_document(self, record: dict[str, Any]) -> None:
+        """Persist a refined document under the shared operation lock."""
+        from app.storage.knowledge.digest_records import save_document
+
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            save_document(conn, record)
+
+    def get_intelligence_document(self, date: str) -> dict[str, Any] | None:
+        """Read a persisted snapshot without running upstream services."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json FROM intelligence_documents WHERE report_date=?", (date,)
+                )
+                .fetchone()
+            )
+            return json.loads(row[0]) if row else None
+
+    # ------------------------------------------------------------------
+    # Daily Digests
+    # ------------------------------------------------------------------
+
+    def load_digest_inputs(self, date: str, start: str, end: str) -> dict[str, Any]:
+        """Read the publication cohort and intelligence in one SQLite snapshot."""
+        from app.storage.knowledge.digest_records import load_inputs
+
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            return load_inputs(conn, date, start, end)
+
+    def save_digest(self, record: dict[str, Any], **options: Any) -> dict[str, Any]:
+        """Atomically persist or return the concurrent winner of a cached day."""
+        from app.storage.knowledge.digest_records import save_digest
+
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return save_digest(conn, record, **options)
+
+    def get_digest(self, date: str) -> dict[str, Any] | None:
+        """Read the archived payload, including its original intelligence snapshot."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute("SELECT payload_json FROM daily_digests WHERE digest_date=?", (date,))
+                .fetchone()
+            )
+            return json.loads(row[0]) if row else None
+
+    def get_digest_history(self, limit: int) -> list[str]:
+        """Return persisted UTC report dates in descending order."""
+        self._check_circuit()
+        with self._op_lock:
+            return [
+                row[0]
+                for row in self._conn_manager.get_connection()
+                .execute(
+                    "SELECT digest_date FROM daily_digests ORDER BY digest_date DESC LIMIT ?",
+                    (limit,),
+                )
+                .fetchall()
+            ]
+
+    # ------------------------------------------------------------------
+    # Daily Insight Reports
+    # ------------------------------------------------------------------
 
     def load_intelligence_inputs(self, start: str, end: str) -> dict[str, Any]:
         """Read one UTC fetched cohort, saved prerequisites and recent patterns.
@@ -1183,6 +1260,10 @@ class SQLiteKnowledgeStore:
                 "insights": [json.loads(row[0]) for row in rows],
             }
 
+    # ------------------------------------------------------------------
+    # Importance Scores
+    # ------------------------------------------------------------------
+
     def load_importance_inputs(
         self, ids: list[str], start: str, end: str, week: str
     ) -> dict[str, Any]:
@@ -1300,6 +1381,10 @@ class SQLiteKnowledgeStore:
             )
             return json.loads(row[0]) if row else None
 
+    # ------------------------------------------------------------------
+    # Trend Runs and Snapshots
+    # ------------------------------------------------------------------
+
     def query_trend_items(self, start: str, end: str) -> list[dict[str, Any]]:
         """Read live analyzed items in [start, end) by first persistence.
 
@@ -1402,9 +1487,9 @@ class SQLiteKnowledgeStore:
             )
             return dict(json.loads(row[0])) if row else None
 
-    # =============================================================================
+    # ------------------------------------------------------------------
     # Analyze Content
-    # =============================================================================
+    # ------------------------------------------------------------------
 
     def query_analyses_in_window(self, start: str, end: str) -> list[dict[str, Any]]:
         """Read current analyses and source identities in an inclusive UTC window.
@@ -1432,6 +1517,10 @@ class SQLiteKnowledgeStore:
             )
             columns = [column[0] for column in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Pattern Discovery and History
+    # ------------------------------------------------------------------
 
     def query_pattern_items(self, start: str, end: str) -> list[dict[str, Any]]:
         """Read live analyses by stable first-persisted time in (start, end]."""
@@ -1527,6 +1616,10 @@ class SQLiteKnowledgeStore:
             )
             return [dict(json.loads(payload), observed_at=observed) for payload, observed in rows]
 
+    # ------------------------------------------------------------------
+    # Cross-Source Groups
+    # ------------------------------------------------------------------
+
     def replace_cross_source_groups(
         self, time_window_days: int, rows: list[dict[str, Any]]
     ) -> None:
@@ -1564,6 +1657,10 @@ class SQLiteKnowledgeStore:
                     for row in rows
                 ],
             )
+
+    # ------------------------------------------------------------------
+    # Content Analysis
+    # ------------------------------------------------------------------
 
     def query_unanalyzed(self, limit: int = 50) -> list[KnowledgeObject]:
         """Query KnowledgeObjects that do not have a content analysis yet.
@@ -1655,7 +1752,7 @@ class SQLiteKnowledgeStore:
             )
 
     # ------------------------------------------------------------------
-    # Save internals
+    # Internal Atomic Saves
     # ------------------------------------------------------------------
 
     @retry_on_transient_error(
@@ -1844,6 +1941,10 @@ class SQLiteKnowledgeStore:
                 existing_id,
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Internal Row Conversion
+    # ------------------------------------------------------------------
 
     def _row_to_knowledge_object(self, row: tuple[Any, ...]) -> KnowledgeObject:
         """Convert a SELECT row into a KnowledgeObject."""
