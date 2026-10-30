@@ -16,5 +16,12 @@ app/storage/search/bm25_index.pkl
 __pycache__/
 *.py[cod]
 
-# Runtime run metrics (P1.9)
+# Runtime run metrics
 app/storage/metrics/
+.env.web
+web/.env*
+!web/.env.example
+web/node_modules/
+web/coverage/
+web/playwright-report/
+web/test-results/
