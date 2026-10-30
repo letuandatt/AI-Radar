@@ -8,6 +8,7 @@ from app.core.logger import get_logger
 from app.models.knowledge_object import KnowledgeObject
 from app.services.digest.config import Category, DigestConfig
 from app.services.digest.models import DailyDigest, DigestItem, DigestSection, topic_groups
+from app.services.digest.organizer import ContentOrganizer
 from app.services.importance.models import ImportanceScore
 from app.services.intelligence.models import day_start
 from app.services.repository.access_service import RepositoryAccessService
@@ -20,6 +21,7 @@ class DailyDigestGenerator:
 
     No upstream jobs or LLM calls. Ordinary generation returns the cached day;
     rebuild uses optimistic concurrency and preserves the old digest on failure.
+    New snapshots are organized before saving; existing archives are not restyled.
     """
 
     def __init__(
@@ -32,6 +34,7 @@ class DailyDigestGenerator:
         self._access = access_service
         self._config = DigestConfig.model_validate(config.model_dump())
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._organizer = ContentOrganizer()
 
     def generate(self, date: str, *, rebuild: bool = False) -> DailyDigest:
         """Select up to five items per category and atomically cache the result."""
@@ -120,6 +123,7 @@ class DailyDigestGenerator:
             intelligence=document,
             config=self._config,
         )
+        digest = self._organizer.organize(digest)
         result = self._access.save_digest(
             digest,
             fingerprint=data["fingerprint"],

@@ -55,12 +55,15 @@ class DigestItem(Citation):
 
 
 class DigestSection(Contract):
-    """Editorial category is separate from each item's original source_type."""
+    """Editorial category is separate from each item's original source_type.
+
+    Empty sections are accepted as organizer input and omitted from its output.
+    """
 
     section_id: str = Field(min_length=1)
     section_title: str = Field(min_length=1)
     category: Category
-    items: list[DigestItem] = Field(min_length=1, max_length=5)
+    items: list[DigestItem] = Field(default_factory=list, max_length=5)
 
 
 def topic_groups(sections: list[DigestSection]) -> dict[str, list[str]]:
