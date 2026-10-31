@@ -417,10 +417,9 @@ class TestHybridSearch:
     def test_hybrid_search_handles_both_failures(
         self, retriever, mock_vector_search, mock_bm25_index
     ) -> None:
-        """hybrid_search() returns empty list if both sources fail."""
+        """A complete outage must not masquerade as an empty collection."""
         mock_vector_search.search.side_effect = Exception("Qdrant down")
         mock_bm25_index.search.side_effect = Exception("BM25 error")
 
-        results = retriever.hybrid_search("test query")
-
-        assert results == []
+        with pytest.raises(RuntimeError, match="Both retrieval branches"):
+            retriever.hybrid_search("test query")

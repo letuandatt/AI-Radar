@@ -138,23 +138,32 @@ def test_statistics_schema_and_cached_digest_reads(bound):
     assert api.get("/api/v1/schema/script").status_code == 404
 
 
-def test_retrieval_rejects_unsupported_filters(bound):
+def test_retrieval_passes_repository_eligibility_to_every_method(bound):
     api = client(bound)
-    assert api.post("/api/v1/retrieval/search", json={"query": "AI"}).status_code == 200
-    for method in ("keyword", "hybrid"):
-        assert (
-            api.post(
-                "/api/v1/retrieval/search",
-                json={"query": "AI", "method": method, "filters": {"topics": ["AI"]}},
-            ).status_code
-            == 400
+
+    for method in ("keyword", "hybrid", "vector"):
+        response = api.post(
+            "/api/v1/retrieval/search",
+            json={
+                "query": "AI",
+                "method": method,
+                "filters": {"topics": ["AI"], "source_types": ["rss", "github"]},
+            },
         )
+
+        assert response.status_code == 200
+        assert bound.retrieval.search.call_args.kwargs["candidate_ids"] == frozenset({"0", "1"})
+        assert response.json()["filters_applied"]["topics"] == ["AI"]
+
     response = api.post(
         "/api/v1/retrieval/search",
-        json={"query": "AI", "method": "vector", "filters": {"topics": ["AI"]}},
+        json={
+            "query": "AI",
+            "filters": {"offset": 20},
+        },
     )
-    assert response.status_code == 200
-    assert bound.retrieval.search.call_args.kwargs["metadata_filter"].topics == ["AI"]
+
+    assert response.status_code == 400
 
 
 def test_auth_protects_data_schema_and_docs(bound):

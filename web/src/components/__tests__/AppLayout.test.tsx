@@ -101,14 +101,16 @@ describe('Editorial reading experience', () => {
     expect(localStorage.getItem('ai-radar-theme')).toBe('light');
   });
 
-  it('uses actual API stories and sends source filters', async () => {
+    it('uses actual API stories and sends source filters', async () => {
     const sources: string[][] = [];
 
     server.use(
-      http.get('*/api/v1/knowledge', ({ request }) => {
-        sources.push(
-          new URL(request.url).searchParams.getAll('source_types'),
-        );
+      http.post('*/api/v1/knowledge/search', async ({ request }) => {
+        const body = await request.json() as {
+          source_types: string[];
+        };
+
+        sources.push(body.source_types);
 
         return HttpResponse.json({
           items: [
