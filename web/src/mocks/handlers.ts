@@ -11,6 +11,7 @@ import {
 } from '../api/generated.msw';
 
 import type { BrowsePage } from '../api/generated';
+import { schemas } from './schemas';
 
 const empty: BrowsePage = {
   items: [],
@@ -22,20 +23,38 @@ const empty: BrowsePage = {
   },
 };
 
-// Generated handlers plus deliberate stable fixtures.
 export const handlers = [
   getGetHealthMockHandler({ status: 'ok' }),
   getGetReadinessMockHandler({ status: 'ready' }),
+
   getGetStatisticsMockHandler({
     total_items: 0,
     by_source: {},
     by_date_range: {},
     last_updated: null,
   }),
+
   getListKnowledgeMockHandler(empty),
   getFilterKnowledgeMockHandler(empty),
   getGetDigestHistoryMockHandler([]),
   getGetSourceHealthMockHandler([]),
+
+  http.get('*/api/v1/schema/:kind', ({ params }) => {
+    const schema = schemas[String(params.kind) as keyof typeof schemas];
+
+    return schema
+      ? HttpResponse.json(schema)
+      : HttpResponse.json({ detail: 'Not found' }, { status: 404 });
+  }),
+
+  http.post('*/api/v1/retrieval/search', () => HttpResponse.json({
+    query: '',
+    results: [],
+    total_matches: 0,
+    method: 'hybrid',
+    retrieval_time_ms: 0,
+  })),
+
   http.all('*/api/v1/*', () =>
     HttpResponse.json(
       { detail: 'No mock fixture for this resource' },

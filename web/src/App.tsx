@@ -1,11 +1,9 @@
 import { Component, useState, type ReactNode } from 'react';
-import { Link, Route, Routes, useParams } from 'react-router-dom';
+import { Link, Route, Routes } from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
-  Orbit,
-  RefreshCw,
   Sparkles,
 } from 'lucide-react';
 
@@ -13,11 +11,18 @@ import { AppLayout } from './components/layout/AppLayout';
 import {
   useGetDigest,
   useGetDigestHistory,
-  useGetKnowledge,
   useListKnowledge,
   type BrowseItem,
 } from './api/generated';
 import { useTheme } from './theme';
+import {
+  Cover,
+  Message,
+  dateLabel,
+  storyUrl,
+} from './components/shared/Reading';
+import { KnowledgePage } from './pages/KnowledgePage';
+import { KnowledgeDetailPage } from './pages/KnowledgeDetailPage';
 
 const channels = [
   { label: 'All stories', sources: [] },
@@ -25,35 +30,6 @@ const channels = [
   { label: 'Open source', sources: ['github'] },
   { label: 'Models', sources: ['hf', 'huggingface'] },
 ];
-
-const dateLabel = (value?: string | null) => {
-  if (!value || Number.isNaN(Date.parse(value))) {
-    return 'Undated';
-  }
-
-  return new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(value));
-};
-
-const storyUrl = (id: string) =>
-  `/knowledge/${encodeURIComponent(id)}`;
-
-function safeUrl(value?: string | null) {
-  try {
-    const url = new URL(value ?? '');
-
-    return (
-      ['https:', 'http:'].includes(url.protocol) &&
-      !url.username &&
-      !url.password
-    ) ? url.href : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -77,72 +53,6 @@ export class ErrorBoundary extends Component<
 
     return this.props.children;
   }
-}
-
-function Cover({
-  variant = 0,
-  large = false,
-}: {
-  variant?: number;
-  large?: boolean;
-}) {
-  return (
-    <div
-      className={`story-cover cover-${variant % 3} ${
-        large ? 'cover-large' : ''
-      }`}
-      aria-hidden="true"
-    >
-      <div className="cover-grid" />
-      <div className="orbital orbital-one" />
-      <div className="orbital orbital-two" />
-      <div className="orbital orbital-three" />
-
-      <div className="cover-core">
-        <Orbit size={large ? 92 : 58} strokeWidth={0.7} />
-      </div>
-
-      <span className="cover-word">
-        {[
-          'INTELLIGENCE',
-          'OPEN SYSTEMS',
-          'NEXT HORIZON',
-        ][variant % 3]}
-      </span>
-
-      <span className="cover-index">
-        RADAR / 0{variant % 3 + 1}
-      </span>
-    </div>
-  );
-}
-
-function Message({
-  title,
-  children,
-  retry,
-}: {
-  title: string;
-  children: ReactNode;
-  retry?: () => void;
-}) {
-  return (
-    <section
-      className="empty-state"
-      role={retry ? 'alert' : 'status'}
-    >
-      <Orbit size={36} />
-      <h2>{title}</h2>
-      <p>{children}</p>
-
-      {retry && (
-        <button className="pill-button" onClick={retry}>
-          <RefreshCw size={16} />
-          Try again
-        </button>
-      )}
-    </section>
-  );
 }
 
 function StoryCard({
@@ -405,83 +315,6 @@ function NewsPage({ explore = false }: { explore?: boolean }) {
   );
 }
 
-function ArticlePage() {
-  const { id = '' } = useParams();
-  const article = useGetKnowledge(encodeURIComponent(id));
-
-  if (article.isPending) {
-    return (
-      <Message title="Opening your story…">
-        Just a moment.
-      </Message>
-    );
-  }
-
-  if (article.isError || !article.data) {
-    return (
-      <Message
-        title="This story isn't available."
-        retry={() => void article.refetch()}
-      >
-        It may have been removed, or the connection was interrupted.
-      </Message>
-    );
-  }
-
-  const item = article.data;
-  const original = safeUrl(item.source_url);
-
-  return (
-    <article className="reading-page">
-      <Link to="/knowledge" className="text-link">
-        <ArrowLeft size={16} />
-        Back to stories
-      </Link>
-
-      <div className="eyebrow article-source">
-        {item.source_name} / {item.source_type}
-      </div>
-
-      <h1>{item.title}</h1>
-
-      <div className="article-byline">
-        <time>{dateLabel(item.published_at)}</time>
-        <span>Collected {dateLabel(item.fetched_at)}</span>
-
-        {original && (
-          <a
-            href={original}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-link"
-          >
-            Original source
-            <ArrowUpRight size={16} />
-          </a>
-        )}
-      </div>
-
-      <Cover large variant={1} />
-
-      {item.metadata.summary && (
-        <p className="article-summary">
-          {item.metadata.summary}
-        </p>
-      )}
-
-      <div className="topic-tags">
-        {item.metadata.topics.map(topic => (
-          <span key={topic}>{topic}</span>
-        ))}
-      </div>
-
-      <div className="article-content">
-        {item.content_text}
-      </div>
-    </article>
-  );
-}
-
 function DigestPage() {
   const history = useGetDigestHistory({ limit: 30 });
   const [selected, setSelected] = useState('');
@@ -632,22 +465,27 @@ export function App() {
       <Routes>
         <Route element={<AppLayout />}>
           <Route index element={<NewsPage />} />
+
           <Route
             path="knowledge"
-            element={<NewsPage explore />}
+            element={<KnowledgePage />}
           />
+
           <Route
             path="knowledge/:id"
-            element={<ArticlePage />}
+            element={<KnowledgeDetailPage />}
           />
+
           <Route
             path="digest"
             element={<DigestPage />}
           />
+
           <Route
             path="settings"
             element={<SettingsPage />}
           />
+
           <Route
             path="*"
             element={

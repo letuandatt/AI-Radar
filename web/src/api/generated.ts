@@ -1626,7 +1626,7 @@ export const getSearchKnowledgeUrl = () => {
 }
 
 /**
- * Rank candidates; reject filter combinations the service cannot enforce.
+ * Rank eligible live records; both retrieval branches apply the same ID restriction.
  * @summary Search
  */
 export const searchKnowledge = async (searchRequest: SearchRequest, options?: Parameters<typeof apiFetch>[1]): Promise<RetrievalResponse> => {
@@ -1715,7 +1715,7 @@ export const getGetUISchemaUrl = (kind: string,) => {
 }
 
 /**
- * Describe allowlisted field renderers for upcoming UI components.
+ * Describe allowlisted field renderers for knowledge components.
  * @summary Schema
  */
 export const getUISchema = async (kind: string, options?: Parameters<typeof apiFetch>[1]): Promise<UISchema> => {
