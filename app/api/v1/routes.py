@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.api.v1.models import DigestView, SchemaField, SearchRequest, Status, UISchema
 from app.services.repository.browse_models import BrowseDetail, BrowsePage, BrowseQuery
 from app.services.repository.query_models import RepositoryStatistics, SourceHealth
-from app.services.retrieval.filter_models import MetadataFilter
 from app.services.retrieval.retrieval_models import RetrievalResponse
 
 router = APIRouter(prefix="/api/v1")
@@ -84,37 +83,32 @@ async def related(request: Request, item_id: str, top_k: int = Query(default=3, 
 
 @router.post("/retrieval/search", operation_id="searchKnowledge", response_model=RetrievalResponse)
 async def search(request: Request, body: SearchRequest):
-    """Rank candidates; reject filter combinations the service cannot enforce."""
+    """Rank eligible live records; both retrieval branches apply the same ID restriction."""
     bound = services(request)
     if bound.retrieval is None:
         raise HTTPException(503, "Retrieval unavailable")
-    metadata_filter = None
-    if body.filters is not None:
-        # Keyword and hybrid's keyword branch do not enforce metadata prefilters.
-        if body.method != "vector" or len(body.filters.source_types) > 1:
-            raise HTTPException(400, "Filters currently require vector search and one source type")
-        if body.filters.model_fields_set - {
-            "source_types",
-            "source_names",
-            "topics",
-            "published_after",
-            "published_before",
-        }:
-            raise HTTPException(400, "Ranking search does not accept pagination or sorting")
-        f = body.filters
-        metadata_filter = MetadataFilter(
-            source_type=f.source_types[0] if f.source_types else None,
-            source_names=f.source_names or None,
-            topics=f.topics or None,
-            published_after=f.published_after,
-            published_before=f.published_before,
-        )
-    return await asyncio.to_thread(
+
+    query = body.filters or BrowseQuery()
+    allowed = {"source_types", "source_names", "topics", "published_after", "published_before"}
+
+    if body.filters is not None and body.filters.model_fields_set - allowed:
+        raise HTTPException(400, "Ranking search does not accept pagination or sorting")
+
+    candidate_ids = await asyncio.to_thread(bound.browse.matching_ids, query)
+    result = await asyncio.to_thread(
         bound.retrieval.search,
         body.query,
-        metadata_filter=metadata_filter,
         top_k=body.top_k,
         method=body.method,
+        candidate_ids=candidate_ids,
+    )
+
+    return result.model_copy(
+        update={
+            "filters_applied": query.model_dump(mode="json", include=allowed, exclude_none=True)
+            if body.filters is not None
+            else None
+        }
     )
 
 
@@ -149,7 +143,7 @@ async def latest(request: Request):
 
 @router.get("/schema/{kind}", operation_id="getUISchema", response_model=UISchema)
 async def schema(kind: str) -> UISchema:
-    """Describe allowlisted field renderers for upcoming UI components."""
+    """Describe allowlisted field renderers for knowledge components."""
     definitions = {
         "table": [
             ("title", "Title", "text", False),
@@ -166,12 +160,20 @@ async def schema(kind: str) -> UISchema:
         ],
         "detail": [
             ("title", "Title", "text", False),
-            ("fetched_at", "Fetched", "date", False),
+            ("source_name", "Source", "text", False),
+            ("published_at", "Published", "date", False),
+            ("fetched_at", "Collected", "date", False),
+            ("summary", "Summary", "text", False),
+            ("topics", "Topics", "tags", False),
+            ("entities", "Entities", "tags", False),
+            ("relevance_score", "AI relevance", "score", False),
             ("content_text", "Content", "text", False),
         ],
     }
+
     if kind not in definitions:
         raise HTTPException(404, "Schema not found")
+
     return UISchema(
         fields=[
             SchemaField.model_validate(dict(key=k, label=label, renderer=renderer, sortable=sort))

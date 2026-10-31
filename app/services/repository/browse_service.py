@@ -19,6 +19,7 @@ class BrowseService:
         """Read an exact filtered total and summaries, without loading full contents."""
         rows, total = self._store.page(**query.model_dump(mode="json"))
         items = []
+
         for row in rows:
             metadata = json.loads(row.pop("metadata_json"))
             items.append(
@@ -26,6 +27,7 @@ class BrowseService:
                     **row, topics=metadata["topics"], relevance_score=metadata["relevance_score"]
                 )
             )
+
         return BrowsePage(
             items=items,
             total=total,
@@ -34,4 +36,19 @@ class BrowseService:
                 has_prev=query.offset > 0,
                 has_next=query.offset + len(items) < total,
             ),
+        )
+
+    def matching_ids(self, query: BrowseQuery) -> frozenset[str]:
+        """Resolve eligible search IDs through the repository gateway."""
+        return self._store.matching_ids(
+            **query.model_dump(
+                mode="json",
+                include={
+                    "source_types",
+                    "source_names",
+                    "topics",
+                    "published_after",
+                    "published_before",
+                },
+            )
         )

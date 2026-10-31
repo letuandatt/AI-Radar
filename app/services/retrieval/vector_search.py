@@ -9,6 +9,8 @@ Part of RAG-001 Retrieval Strategy implementation.
 from dataclasses import dataclass, field
 from typing import Any
 
+from qdrant_client.http import models as qdrant_models
+
 from app.core.logger import get_logger
 from app.services.embedding.provider import EmbeddingProvider
 from app.services.retrieval.filter_models import MetadataFilter
@@ -74,31 +76,35 @@ class VectorSearchService:
         query: str,
         metadata_filter: MetadataFilter | None = None,
         top_k: int = 20,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> list[VectorSearchResult]:
         """Search for semantically similar knowledge objects.
-
-        Steps:
-        1. Build Qdrant filter from MetadataFilter (pre-filtering).
-        2. Embed query text.
-        3. Search Qdrant with filter +vector.
 
         Args:
             query: Search query text.
             metadata_filter: Optional metadata filter for pre-filtering.
             top_k: Maximum number of results.
+            candidate_ids: Optional eligible IDs, applied by Qdrant before top-k.
 
         Returns:
             List of VectorSearchResult sorted by score descending.
         """
-        # Step 1: Build Qdrant filter
+        if candidate_ids == frozenset():
+            return []
+
         qdrant_filter = None
         if metadata_filter is not None and not metadata_filter.is_empty():
             qdrant_filter = self._filter_engine.build_qdrant_filter(metadata_filter)
 
-        # Step 2: Embed query
+        if candidate_ids is not None:
+            conditions: list[Any] = [qdrant_models.HasIdCondition(has_id=sorted(candidate_ids))]
+            qdrant_filter = qdrant_models.Filter(
+                must=[qdrant_filter, *conditions] if qdrant_filter else conditions
+            )
+
         query_vector = self._embedding_provider.embed_text(query)
 
-        # Step 3: Search Qdrant
         return self.search_by_vector(
             vector=query_vector,
             metadata_filter=metadata_filter,

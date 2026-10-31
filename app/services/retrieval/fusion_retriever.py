@@ -234,48 +234,38 @@ class FusionRetriever:
         metadata_filter: MetadataFilter | None = None,
         top_k: int = 10,
         fetch_k: int | None = None,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> list[FusedResult]:
-        """Run hybrid search: vector + BM25 in parallel, then fuse.
-
-        Steps:
-        1. Run vector search and BM25 search in parallel.
-        2. Fuse results using RRF.
-        3. Apply freshness weighting.
-        4. Deduplicate by content_hash.
-        5. Return top_k results.
+        """Run vector + BM25 retrieval, then fuse eligible candidates.
 
         Args:
             query: Search query text.
             metadata_filter: Optional metadata filter.
             top_k: Number of final results to return.
-            fetch_k: Number of results to fetch from each source.
-                     Defaults to top_k * 3 for better fusion quality.
+            fetch_k: Results fetched from each branch; defaults to top_k * 3.
+            candidate_ids: Shared eligibility restriction for both branches.
 
         Returns:
-            List of FusedResult sorted by final score descending.
+            Results sorted by final fusion score.
         """
+        if candidate_ids == frozenset():
+            return []
         if fetch_k is None:
             fetch_k = top_k * 3
 
         start_time = time.perf_counter()
 
-        # Step 1: Run searches in parallel using ThreadPoolExecutor
         vector_results, bm25_results = self._parallel_search(
             query=query,
             metadata_filter=metadata_filter,
             fetch_k=fetch_k,
+            **({"candidate_ids": candidate_ids} if candidate_ids is not None else {}),
         )
 
-        # Step 2: Fuse with RRF
         fused = self.fuse(vector_results, bm25_results)
-
-        # Step 3: Apply freshness weighting
         boosted = self._apply_freshness_weighting(fused)
-
-        # Step 4: Deduplicate by content_hash
         deduped = self._deduplicate_by_content_hash(boosted)
-
-        # Step 5: Return top_k
         final = deduped[:top_k]
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -303,10 +293,13 @@ class FusionRetriever:
         query: str,
         metadata_filter: MetadataFilter | None,
         fetch_k: int,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> tuple[list[VectorSearchResult], list[BM25Result]]:
-        """Run vector and BM25 searches in parallel."""
+        """Run both branches; a complete outage must not become an empty result."""
         vector_results: list[VectorSearchResult] = []
         bm25_results: list[BM25Result] = []
+        failures: list[Exception] = []
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             vector_future = executor.submit(
@@ -314,23 +307,29 @@ class FusionRetriever:
                 query,
                 metadata_filter,
                 fetch_k,
+                **({"candidate_ids": candidate_ids} if candidate_ids is not None else {}),
             )
             bm25_future = executor.submit(
                 self._bm25_index.search,
                 query,
                 fetch_k,
+                **({"candidate_ids": candidate_ids} if candidate_ids is not None else {}),
             )
 
-            # Collect results, handling errors gracefully
             try:
                 vector_results = vector_future.result(timeout=30.0)
             except Exception as e:
                 logger.error("Vector search failed: %s", e)
+                failures.append(e)
 
             try:
                 bm25_results = bm25_future.result(timeout=30.0)
             except Exception as e:
                 logger.error("BM25 search failed: %s", e)
+                failures.append(e)
+
+        if len(failures) == 2:
+            raise RuntimeError("Both retrieval branches are unavailable") from failures[0]
 
         return vector_results, bm25_results
 
