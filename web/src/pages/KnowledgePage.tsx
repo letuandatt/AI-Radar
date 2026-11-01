@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { AddKnowledgeModal } from '../components/knowledge/AddKnowledgeModal';
 import { useGetSourceHealth } from '../api/generated';
 import { KnowledgeFilters } from '../components/knowledge/KnowledgeFilters';
 import {
@@ -16,6 +18,7 @@ import { allowedFields, useSchema } from '../hooks/useSchema';
 import './knowledge.css';
 
 export function KnowledgePage() {
+  const [adding, setAdding] = useState(false);
   const {
     state,
     params,
@@ -40,6 +43,7 @@ export function KnowledgePage() {
 
   return (
     <>
+      {adding && <AddKnowledgeModal onClose={() => setAdding(false)} />}
       <section className="edition-heading">
         <div className="eyebrow">
           <span className="signal-dot" />
@@ -57,6 +61,9 @@ export function KnowledgePage() {
               <br />
               Read, connect, explore.
             </p>
+            <button className="pill-button" onClick={() => setAdding(true)}>
+              Add a story +
+            </button>
           </div>
         </div>
       </section>
