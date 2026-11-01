@@ -50,7 +50,7 @@ def test_main_shares_controls_and_does_not_fall_back():
     remote.estimate_cost.return_value = 0.1
     remote.structured_chat.side_effect = TransientLLMError("API unavailable")
     original = LLMProviderChain([local], rate_limiter=limiter, cost_tracker=tracker)
-    with patch("app.integrations.llm.groq_provider.GroqProvider", return_value=remote) as groq:
+    with patch("app.integrations.llm.factory.GroqProvider", return_value=remote) as groq:
         manual = create_manual_llm_chain(settings(), shared_chain=original)
     assert manual.cost_tracker is tracker
     assert groq.call_args.kwargs["cost_tracker"] is tracker
