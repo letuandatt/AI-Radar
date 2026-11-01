@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from app.core.logger import get_logger
+from app.models.feedback import FeedbackRating
 from app.models.knowledge_object import KnowledgeObject
 from app.services.repository.query_models import (
     InvalidQueryError,
@@ -484,14 +485,17 @@ class RepositoryAccessService:
             raise ValueError("Inconsistent or future trend context")
         return result
 
-    def save_importance_scores(self, scores: list["ImportanceScore"]) -> None:
+    def save_importance_scores(self, scores: list["ImportanceScore"]) -> list["ImportanceScore"]:
         """Validate every score before issuing one atomic store operation."""
         from app.services.importance.models import ImportanceScore
 
         validated = [ImportanceScore.model_validate(score.model_dump()) for score in scores]
         if len({score.knowledge_id for score in validated}) != len(validated):
             raise ValueError("Duplicate knowledge_id in importance batch")
-        self._store.save_importance_scores([score.model_dump(mode="json") for score in validated])
+        saved = self._store.save_importance_scores(
+            [score.model_dump(mode="json") for score in validated]
+        )
+        return [ImportanceScore.model_validate(row) for row in saved]
 
     def get_importance_score(self, knowledge_id: str) -> "ImportanceScore | None":
         """Read a saved score; None means no score for a live knowledge item."""
@@ -499,6 +503,24 @@ class RepositoryAccessService:
 
         row = self._store.get_importance_score(knowledge_id)
         return ImportanceScore.model_validate(row) if row is not None else None
+
+    # ------------------------------------------------------------------
+    # Reader Feedback
+    # ------------------------------------------------------------------
+
+    def save_user_feedback(
+        self, knowledge_id: str, rating: FeedbackRating | None
+    ) -> dict[str, Any]:
+        """Persist the current choice together with any importance adjustment."""
+        return self._store.save_user_feedback(knowledge_id, rating)
+
+    def get_user_feedback(self, knowledge_id: str) -> dict[str, Any]:
+        """Read the current choice and score for one live knowledge item."""
+        return self._store.get_user_feedback(knowledge_id)
+
+    def list_user_feedback_topics(self) -> list[dict[str, Any]]:
+        """Read live rated items for preference aggregation."""
+        return self._store.list_user_feedback_topics()
 
     # ------------------------------------------------------------------
     # Daily Insight Reports
