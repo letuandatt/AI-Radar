@@ -8,7 +8,15 @@ from app.services.repository.browse_service import BrowseService
 from app.storage.knowledge.browse_store import SQLiteBrowseStore
 
 
-def start_web(initializer, app_service, retrieval, config: WebConfig) -> WebServer:
+def start_web(
+    initializer,
+    app_service,
+    retrieval,
+    config: WebConfig,
+    *,
+    llm_chain=None,
+    importance_config=None,
+) -> WebServer:
     """Reuse existing services; optional callbacks keep their existing route paths."""
     subscribers, secret = None, ""
     if config.email_callbacks_enabled:
@@ -21,13 +29,33 @@ def start_web(initializer, app_service, retrieval, config: WebConfig) -> WebServ
         subscribers = SubscriberService(
             EmailStore(initializer.config.sqlite_path), email.soft_bounce_limit
         )
+    access = RepositoryAccessService(initializer.sqlite_store)
+    manual_add = None
+    if llm_chain is not None:
+        from app.prompts.loader import PromptLoader
+        from app.services.analysis.content_analyzer import ContentAnalyzer
+        from app.services.extraction.content_sanitizer import ContentSanitizer
+        from app.services.extraction.metadata_extractor import MetadataExtractor
+        from app.services.importance.scorer import ImportanceScorer
+        from app.services.knowledge.manual_add_service import ManualAddService
+        from app.services.knowledge.url_fetcher import PublicPageFetcher
+
+        manual_add = ManualAddService(
+            app_service,
+            access,
+            PublicPageFetcher(),
+            MetadataExtractor(llm_chain, ContentSanitizer(), max_concurrent=1),
+            ContentAnalyzer(access, llm_chain, PromptLoader(), max_concurrent=1),
+            ImportanceScorer(access, llm_chain, importance_config),
+        )
     bound = WebServices(
         app_service,
         BrowseService(
-            RepositoryAccessService(initializer.sqlite_store),
+            access,
             SQLiteBrowseStore(initializer.config.sqlite_path),
         ),
         retrieval,
+        manual_add,
     )
     return WebServer(
         create_app(bound, config=config, subscribers=subscribers, webhook_secret=secret), config

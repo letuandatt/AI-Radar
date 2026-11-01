@@ -1,4 +1,4 @@
-"""Thin read endpoints. All synchronous service calls run outside the event loop."""
+"""Versioned endpoints. Blocking I/O and provider work run outside the event loop."""
 
 import asyncio
 from datetime import date
@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.api.v1.models import DigestView, SchemaField, SearchRequest, Status, UISchema
+from app.services.knowledge.models import ManualAddError, ManualAddRequest, ManualAddResult
 from app.services.repository.browse_models import BrowseDetail, BrowsePage, BrowseQuery
 from app.services.repository.query_models import RepositoryStatistics, SourceHealth
 from app.services.retrieval.retrieval_models import RetrievalResponse
@@ -51,6 +52,31 @@ async def source_health(request: Request):
 async def knowledge(request: Request, query: Annotated[BrowseQuery, Query()]):
     """Read a bounded page with repeatable source/topic query parameters."""
     return await asyncio.to_thread(services(request).browse.search, query)
+
+
+@router.post(
+    "/knowledge",
+    operation_id="addKnowledge",
+    response_model=ManualAddResult,
+    responses={
+        409: {"description": "Busy or item in trash"},
+        415: {"description": "JSON required"},
+    },
+)
+async def add_knowledge(request: Request, body: ManualAddRequest):
+    """Add one URL; network and provider credentials stay in backend services."""
+    if (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        != "application/json"
+    ):
+        raise HTTPException(415, "JSON required")
+    service = services(request).manual_add
+    if service is None:
+        raise HTTPException(503, "Manual add is unavailable in this runtime")
+    try:
+        return await service.add(body)
+    except ManualAddError as error:
+        raise HTTPException(error.status, str(error)) from error
 
 
 @router.post("/knowledge/search", operation_id="filterKnowledge", response_model=BrowsePage)

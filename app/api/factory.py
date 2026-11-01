@@ -16,6 +16,7 @@ from app.api.v1.models import ApiError
 from app.api.v1.routes import router
 from app.services.app_service import ApplicationService
 from app.services.email.subscriber_service import SubscriberService
+from app.services.knowledge.manual_add_service import ManualAddService
 from app.services.repository.browse_service import BrowseService
 from app.services.repository.query_models import InvalidQueryError, RepositoryError
 from app.services.retrieval.retrieval_models import RetrievalError
@@ -29,6 +30,7 @@ class WebServices:
     app_service: ApplicationService
     browse: BrowseService
     retrieval: RetrievalService | None = None
+    manual_add: ManualAddService | None = None
 
 
 def create_app(
