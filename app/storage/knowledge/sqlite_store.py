@@ -5,6 +5,7 @@ providing idempotent ingestion, retry logic, timeout handling,
 and circuit breaker behavior.
 """
 
+import json
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -12,18 +13,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from app.core.logger import get_logger
+from app.core.retry import retry_on_transient_error
+from app.models.feedback import FeedbackRating, adjusted_importance
 from app.models.knowledge_object import KnowledgeObject
 from app.models.metadata import ExtractionResult
-from app.storage.knowledge.base import (
-    CircuitBreaker,
-    CircuitBreakerOpenError,
-    SQLiteConnectionManager,
-    retry_on_transient_error,
-)
+from app.storage.knowledge.base import SQLiteConnectionManager
 from app.storage.knowledge.indexes import MetadataIndexManager
 from app.storage.knowledge.knowledge_store import SaveResult
-from app.storage.knowledge.schema import ALL_DDL_STATEMENTS
+from app.storage.knowledge.schema import ALL_DDL_STATEMENTS, IDX_CONTENT_ANALYSES_IDENTITY_DDL
 
 logger = get_logger(__name__)
 
@@ -44,7 +43,8 @@ _SELECT_COLUMNS = """
     updated_at,
     parser_version,
     normalizer_version,
-    extractor_version
+    extractor_version,
+    github_stars
 """
 
 
@@ -74,6 +74,10 @@ class SQLiteKnowledgeStore:
         This avoids SQLite API misuse when the store is shared across threads.
     """
 
+    # ------------------------------------------------------------------
+    # Initialization and Connection Lifecycle
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
         db_path: str | Path = "app/storage/knowledge/knowledge.db",
@@ -86,8 +90,18 @@ class SQLiteKnowledgeStore:
         self._index_manager = MetadataIndexManager()
         self._init_schema()
 
+    @property
+    def conn_manager(self):
+        """Return the ConnectionManager instance."""
+        return self._conn_manager
+
+    def close(self) -> None:
+        """Close the underlying database connection."""
+        with self._op_lock:
+            self._conn_manager.close()
+
     # ------------------------------------------------------------------
-    # Schema
+    # Schema Initialization and Analysis Identity
     # ------------------------------------------------------------------
 
     def _init_schema(self) -> None:
@@ -95,8 +109,17 @@ class SQLiteKnowledgeStore:
         with self._op_lock:
             conn = self._conn_manager.get_connection()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 for ddl in ALL_DDL_STATEMENTS:
                     conn.execute(ddl)
+
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_objects)")}
+                if "github_stars" not in columns:
+                    conn.execute(
+                        "ALTER TABLE knowledge_objects ADD COLUMN github_stars INTEGER "
+                        "CHECK (github_stars IS NULL OR github_stars >= 0)"
+                    )
+                self._ensure_analysis_identity(conn)
 
                 # Ensure metadata indexes exist
                 self._index_manager.ensure_indexes(conn)
@@ -117,6 +140,37 @@ class SQLiteKnowledgeStore:
                 conn.rollback()
                 logger.error("Failed to initialize schema: %s", e)
                 raise
+
+    @staticmethod
+    def _ensure_analysis_identity(conn: sqlite3.Connection) -> None:
+        """Keep the latest legacy analysis per item and enforce its identity.
+
+        Runs inside the schema transaction. Timestamp ties are resolved by
+        creation time, then rowid, so reopening the database is deterministic.
+        """
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'uq_content_analyses_knowledge_id'"
+        ).fetchone()
+        if exists:
+            return
+
+        conn.execute(
+            """
+            DELETE
+            FROM content_analyses
+            WHERE rowid IN (SELECT rowid
+                            FROM (SELECT rowid,
+                                         ROW_NUMBER() OVER (
+                        PARTITION BY knowledge_id
+                        ORDER BY julianday(analyzed_at) DESC,
+                                 julianday(created_at) DESC, rowid DESC
+                    ) AS position
+                                  FROM content_analyses)
+                            WHERE position > 1)
+            """
+        )
+        conn.execute(IDX_CONTENT_ANALYSES_IDENTITY_DDL)
 
     # ------------------------------------------------------------------
     # Circuit Breaker
@@ -151,7 +205,7 @@ class SQLiteKnowledgeStore:
             raise
 
         self._circuit_breaker.record_success()
-        return result  # type: ignore[no-any-return]
+        return result
 
     def get_by_id(self, obj_id: str, include_deleted: bool = False) -> KnowledgeObject | None:
         """Retrieve a KnowledgeObject by internal ID.
@@ -265,16 +319,6 @@ class SQLiteKnowledgeStore:
                 "SELECT COUNT(*) FROM knowledge_objects WHERE deleted_at IS NULL"
             ).fetchone()
             return int(row[0])
-
-    @property
-    def conn_manager(self):
-        """Return the ConnectionManager instance."""
-        return self._conn_manager
-
-    def close(self) -> None:
-        """Close the underlying database connection."""
-        with self._op_lock:
-            self._conn_manager.close()
 
     # ------------------------------------------------------------------
     # Metadata Index Operations
@@ -1002,13 +1046,811 @@ class SQLiteKnowledgeStore:
         return UpdateResult(updated=updated, skipped=skipped)
 
     # ------------------------------------------------------------------
-    # Save internals
+    # Refined Intelligence Documents
+    # ------------------------------------------------------------------
+
+    def save_intelligence_document(self, record: dict[str, Any]) -> None:
+        """Persist a refined document under the shared operation lock."""
+        from app.storage.knowledge.digest_records import save_document
+
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            save_document(conn, record)
+
+    def get_intelligence_document(self, date: str) -> dict[str, Any] | None:
+        """Read a persisted snapshot without running upstream services."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json FROM intelligence_documents WHERE report_date=?", (date,)
+                )
+                .fetchone()
+            )
+            return json.loads(row[0]) if row else None
+
+    # ------------------------------------------------------------------
+    # Daily Digests
+    # ------------------------------------------------------------------
+
+    def load_digest_inputs(self, date: str, start: str, end: str) -> dict[str, Any]:
+        """Read the publication cohort and intelligence in one SQLite snapshot."""
+        from app.storage.knowledge.digest_records import load_inputs
+
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            return load_inputs(conn, date, start, end)
+
+    def save_digest(self, record: dict[str, Any], **options: Any) -> dict[str, Any]:
+        """Atomically persist or return the concurrent winner of a cached day."""
+        from app.storage.knowledge.digest_records import save_digest
+
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return save_digest(conn, record, **options)
+
+    def get_digest(self, date: str) -> dict[str, Any] | None:
+        """Read the archived payload, including its original intelligence snapshot."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute("SELECT payload_json FROM daily_digests WHERE digest_date=?", (date,))
+                .fetchone()
+            )
+            return json.loads(row[0]) if row else None
+
+    def get_digest_history(self, limit: int) -> list[str]:
+        """Return persisted UTC report dates in descending order."""
+        self._check_circuit()
+        with self._op_lock:
+            return [
+                row[0]
+                for row in self._conn_manager.get_connection()
+                .execute(
+                    "SELECT digest_date FROM daily_digests ORDER BY digest_date DESC LIMIT ?",
+                    (limit,),
+                )
+                .fetchall()
+            ]
+
+    # ------------------------------------------------------------------
+    # Daily Insight Reports
+    # ------------------------------------------------------------------
+
+    def load_intelligence_inputs(self, start: str, end: str) -> dict[str, Any]:
+        """Read one UTC fetched cohort, saved prerequisites and recent patterns.
+
+        The SQL guard band is trimmed with exact datetime comparisons before
+        limiting to 30 ranked candidates. Missing prerequisites fail explicitly.
+        Reads share one SQLite transaction; no service models enter storage.
+        """
+        self._check_circuit()
+        lower, upper = datetime.fromisoformat(start), datetime.fromisoformat(end)
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            rows = conn.execute(
+                "SELECT k.id, k.fetched_at, s.final_score, a.knowledge_id "
+                "FROM knowledge_objects k "
+                "LEFT JOIN importance_scores s ON s.knowledge_id = k.id "
+                "LEFT JOIN content_analyses a ON a.knowledge_id = k.id "
+                "WHERE k.deleted_at IS NULL AND julianday(k.fetched_at) "
+                "BETWEEN julianday(?) - 1.0/86400 AND julianday(?) + 1.0/86400 "
+                "ORDER BY s.final_score DESC, k.id",
+                (start, end),
+            ).fetchall()
+            selected: list[str] = []
+            total = 0
+            for identity, fetched, score, analysis_id in rows:
+                instant = datetime.fromisoformat(fetched)
+                if instant.utcoffset() is None:
+                    instant = instant.replace(tzinfo=timezone.utc)
+                if not lower <= instant < upper:
+                    continue
+                total += 1
+                if score is None or analysis_id is None:
+                    raise LookupError(f"Missing saved analysis or importance score: {identity}")
+                if len(selected) < 30:
+                    selected.append(identity)
+            candidates = []
+            for identity in selected:
+                obj = self._row_to_knowledge_object(
+                    conn.execute(
+                        f"SELECT {_SELECT_COLUMNS} FROM knowledge_objects WHERE id = ?", (identity,)
+                    ).fetchone()
+                )
+                cursor = conn.execute(
+                    "SELECT knowledge_id, analyzed_at, themes_json, entities_json, sentiment, "
+                    "key_claims_json, technical_depth, confidence FROM content_analyses "
+                    "WHERE knowledge_id = ?",
+                    (identity,),
+                )
+                analysis = dict(
+                    zip([column[0] for column in cursor.description], cursor.fetchone())
+                )
+                for key in ("themes", "entities", "key_claims"):
+                    analysis[key] = json.loads(analysis.pop(f"{key}_json"))
+                score_row = conn.execute(
+                    "SELECT payload_json FROM importance_scores WHERE knowledge_id = ?", (identity,)
+                ).fetchone()
+                candidates.append(
+                    {"item": obj, "analysis": analysis, "score": json.loads(score_row[0])}
+                )
+            patterns = conn.execute(
+                "SELECT payload_json, updated_at FROM discovered_patterns "
+                "ORDER BY julianday(updated_at) DESC, pattern_id LIMIT 10"
+            ).fetchall()
+            return {
+                "total_items": total,
+                "candidates": candidates,
+                "patterns": [dict(json.loads(row[0]), observed_at=row[1]) for row in patterns],
+            }
+
+    def save_insights(self, records: list[dict[str, Any]], run: dict[str, Any]) -> None:
+        """Atomically replace a report day, checking live citations and stale runs."""
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute(
+                "SELECT started_at FROM insight_runs WHERE report_date = ?", (run["report_date"],)
+            ).fetchone()
+            if old and datetime.fromisoformat(old[0]) > datetime.fromisoformat(run["started_at"]):
+                raise ValueError("Cannot replace a newer insight run")
+            for record in records:
+                for citation in record["citations"]:
+                    live = conn.execute(
+                        "SELECT title, source_url, metadata_json FROM knowledge_objects "
+                        "WHERE id = ? AND deleted_at IS NULL",
+                        (citation["knowledge_id"],),
+                    ).fetchone()
+                    if live is None:
+                        raise LookupError(f"Citation no longer exists: {citation['knowledge_id']}")
+                    if (live[0], live[1], json.loads(live[2])["relevance_score"]) != (
+                        citation["title"],
+                        citation["source_url"],
+                        citation["relevance_score"],
+                    ):
+                        raise ValueError("Citation source changed during generation; retry")
+            conn.execute(
+                "INSERT INTO insight_runs VALUES (?, ?, ?) ON CONFLICT(report_date) "
+                "DO UPDATE SET started_at=excluded.started_at, payload_json=excluded.payload_json",
+                (run["report_date"], run["started_at"], json.dumps(run, allow_nan=False)),
+            )
+            conn.execute("DELETE FROM insights WHERE report_date = ?", (run["report_date"],))
+            conn.executemany(
+                "INSERT INTO insights VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        row["insight_id"],
+                        row["report_date"],
+                        row["insight_type"],
+                        row["title"],
+                        row["description"],
+                        json.dumps(row["evidence_ids"]),
+                        json.dumps(row["citations"]),
+                        row["confidence"],
+                        row["generated_at"],
+                        json.dumps(row, allow_nan=False),
+                    )
+                    for row in records
+                ],
+            )
+
+    def read_insight_report(self, date: str | None = None) -> dict[str, Any]:
+        """Read run and insights atomically; omitted date means latest successful day."""
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            if date is None:
+                latest = conn.execute("SELECT MAX(report_date) FROM insight_runs").fetchone()[0]
+                date = latest
+            run = conn.execute(
+                "SELECT payload_json FROM insight_runs WHERE report_date = ?", (date,)
+            ).fetchone()
+            rows = conn.execute(
+                "SELECT payload_json FROM insights WHERE report_date = ? "
+                "ORDER BY confidence DESC, insight_id",
+                (date,),
+            ).fetchall()
+            return {
+                "run": json.loads(run[0]) if run else None,
+                "insights": [json.loads(row[0]) for row in rows],
+            }
+
+    # ------------------------------------------------------------------
+    # Importance Scores
+    # ------------------------------------------------------------------
+
+    def load_importance_inputs(
+        self, ids: list[str], start: str, end: str, week: str
+    ) -> dict[str, Any]:
+        """Read candidates, live analyses and a trend run in one SQLite snapshot.
+
+        Chunk ID queries for SQLite parameter limits. The one-second SQL guard
+        band is trimmed by exact aware datetime comparisons in the access layer.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN")
+            objects: list[KnowledgeObject] = []
+            analyses: dict[str, dict[str, Any]] = {}
+            analysis_sql = """
+                SELECT a.knowledge_id, a.analyzed_at, a.themes_json, a.entities_json,
+                       a.sentiment, a.key_claims_json, a.technical_depth, a.confidence,
+                       k.source_type, k.source_name
+                FROM content_analyses a JOIN knowledge_objects k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL AND
+            """
+
+            def collect(cursor: sqlite3.Cursor) -> None:
+                names = [column[0] for column in cursor.description]
+                for row in cursor.fetchall():
+                    value = dict(zip(names, row))
+                    analyses[value["knowledge_id"]] = value
+
+            collect(
+                conn.execute(
+                    analysis_sql + " julianday(a.analyzed_at) BETWEEN julianday(?) - 1.0/86400 "
+                    "AND julianday(?) + 1.0/86400",
+                    (start, end),
+                )
+            )
+            for offset in range(0, len(ids), 400):
+                batch = ids[offset : offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                objects.extend(
+                    self._row_to_knowledge_object(row)
+                    for row in conn.execute(
+                        f"SELECT {_SELECT_COLUMNS} FROM knowledge_objects "
+                        f"WHERE deleted_at IS NULL AND id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                )
+                collect(conn.execute(analysis_sql + f" a.knowledge_id IN ({placeholders})", batch))
+            run = conn.execute(
+                "SELECT payload_json FROM trend_runs WHERE week = ?", (week,)
+            ).fetchone()
+            trends = conn.execute(
+                "SELECT payload_json FROM trend_snapshots WHERE week = ?", (week,)
+            ).fetchall()
+            return {
+                "objects": objects,
+                "analyses": list(analyses.values()),
+                "trend_run": json.loads(run[0]) if run else None,
+                "trends": [json.loads(row[0]) for row in trends],
+            }
+
+    def save_importance_scores(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Save atomically using the latest feedback, even if it changed during scoring."""
+        self._check_circuit()
+        if not records:
+            return []
+        persisted = []
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for record in records:
+                identity = record["knowledge_id"]
+                if not conn.execute(
+                    "SELECT 1 FROM knowledge_objects WHERE id = ? AND deleted_at IS NULL",
+                    (identity,),
+                ).fetchone():
+                    raise LookupError(f"Knowledge item no longer exists: {identity}")
+                old = conn.execute(
+                    "SELECT computed_at FROM importance_scores WHERE knowledge_id = ?", (identity,)
+                ).fetchone()
+                if old and datetime.fromisoformat(old[0]) > datetime.fromisoformat(
+                    record["computed_at"]
+                ):
+                    raise ValueError("Cannot overwrite a newer importance score")
+                feedback = conn.execute(
+                    "SELECT rating FROM user_feedback WHERE knowledge_id = ?", (identity,)
+                ).fetchone()
+                record = self._apply_feedback(record, feedback[0] if feedback else None)
+                conn.execute(
+                    """
+                    INSERT INTO importance_scores (knowledge_id, computed_at, final_score,
+                        components_json, llm_adjusted, llm_score, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(knowledge_id) DO UPDATE SET
+                        computed_at=excluded.computed_at, final_score=excluded.final_score,
+                        components_json=excluded.components_json,
+                        llm_adjusted=excluded.llm_adjusted,
+                        llm_score=excluded.llm_score, payload_json=excluded.payload_json
+                    """,
+                    (
+                        identity,
+                        record["computed_at"],
+                        record["final_score"],
+                        json.dumps(record["components"], allow_nan=False),
+                        int(record["llm_adjusted"]),
+                        record["llm_score"],
+                        json.dumps(record, ensure_ascii=False, allow_nan=False),
+                    ),
+                )
+                persisted.append(record)
+        return persisted
+
+    @staticmethod
+    def _apply_feedback(record: dict[str, Any], rating: FeedbackRating | None) -> dict[str, Any]:
+        """Always derive from the rule/LLM base; never adjust an already adjusted final score."""
+        base = (
+            0.7 * record["rule_score"] + 0.3 * record["llm_score"]
+            if record["llm_score"] is not None
+            else record["rule_score"]
+        )
+        return {
+            **record,
+            "score_version": "v2",
+            "feedback_rating": rating,
+            "final_score": adjusted_importance(base, rating),
+        }
+
+    def get_importance_score(self, knowledge_id: str) -> dict[str, Any] | None:
+        """Return the latest saved score only while its knowledge item is live."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT s.payload_json FROM importance_scores s JOIN knowledge_objects k "
+                    "ON k.id = s.knowledge_id WHERE k.id = ? AND k.deleted_at IS NULL",
+                    (knowledge_id,),
+                )
+                .fetchone()
+            )
+            return json.loads(row[0]) if row else None
+
+    # ------------------------------------------------------------------
+    # Reader Feedback
+    # ------------------------------------------------------------------
+
+    def save_user_feedback(
+        self, knowledge_id: str, rating: FeedbackRating | None
+    ) -> dict[str, Any]:
+        """Replace or clear a choice and its score atomically; identical writes are no-ops."""
+        self._check_circuit()
+        adjusted_importance(0.5, rating)
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._read_user_feedback(conn, knowledge_id)
+            if current["rating"] == rating:
+                return current
+            if rating is None:
+                conn.execute("DELETE FROM user_feedback WHERE knowledge_id = ?", (knowledge_id,))
+            else:
+                conn.execute(
+                    "INSERT INTO user_feedback (knowledge_id, rating, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(knowledge_id) DO UPDATE SET "
+                    "rating=excluded.rating, updated_at=excluded.updated_at",
+                    (knowledge_id, rating, datetime.now(timezone.utc).isoformat()),
+                )
+            if current["score"] is not None:
+                score = self._apply_feedback(current["score"], rating)
+                conn.execute(
+                    "UPDATE importance_scores SET final_score = ?, payload_json = ? "
+                    "WHERE knowledge_id = ?",
+                    (score["final_score"], json.dumps(score, allow_nan=False), knowledge_id),
+                )
+            return self._read_user_feedback(conn, knowledge_id)
+
+    @staticmethod
+    def _read_user_feedback(conn: sqlite3.Connection, knowledge_id: str) -> dict[str, Any]:
+        row = conn.execute(
+            "SELECT k.id, f.rating, f.updated_at, s.payload_json FROM knowledge_objects k "
+            "LEFT JOIN user_feedback f ON f.knowledge_id = k.id "
+            "LEFT JOIN importance_scores s ON s.knowledge_id = k.id "
+            "WHERE k.id = ? AND k.deleted_at IS NULL",
+            (knowledge_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Knowledge item not found")
+        return {
+            "knowledge_id": row[0],
+            "rating": row[1],
+            "updated_at": row[2],
+            "score": json.loads(row[3]) if row[3] else None,
+        }
+
+    def get_user_feedback(self, knowledge_id: str) -> dict[str, Any]:
+        """Read a choice and score in one statement; deleted items are unavailable."""
+        self._check_circuit()
+        with self._op_lock:
+            return self._read_user_feedback(self._conn_manager.get_connection(), knowledge_id)
+
+    def list_user_feedback_topics(self) -> list[dict[str, Any]]:
+        """Read current topic metadata for live rated items only."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT f.rating, k.metadata_json FROM user_feedback f "
+                    "JOIN knowledge_objects k ON k.id = f.knowledge_id WHERE k.deleted_at IS NULL"
+                )
+                .fetchall()
+            )
+            return [{"rating": row[0], "metadata_json": row[1]} for row in rows]
+
+    # ------------------------------------------------------------------
+    # Trend Runs and Snapshots
+    # ------------------------------------------------------------------
+
+    def query_trend_items(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read live analyzed items in [start, end) by first persistence.
+
+        A one-second SQL guard band avoids julianday rounding at microsecond
+        boundaries; the final aware-datetime comparison is exact.
+        """
+        self._check_circuit()
+        lower, upper = datetime.fromisoformat(start), datetime.fromisoformat(end)
+        with self._op_lock:
+            cursor = self._conn_manager.get_connection().execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.created_at AS first_observed_at,
+                       a.themes_json, a.entities_json, a.sentiment, a.key_claims_json,
+                       a.technical_depth, a.confidence, k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.created_at) >= julianday(?) - 1.0 / 86400
+                  AND julianday(a.created_at) < julianday(?) + 1.0 / 86400
+                ORDER BY julianday(a.created_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            return [
+                row
+                for row in rows
+                if lower <= datetime.fromisoformat(row["first_observed_at"]) < upper
+            ]
+
+    def save_trend_snapshots(self, records: list[dict[str, Any]], run: dict[str, Any]) -> None:
+        """Atomically replace a week's complete snapshot, including empty runs.
+
+        BEGIN IMMEDIATE serializes stale-run checks across store instances.
+        Any failure rolls back both run metadata and candidate replacement.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute(
+                "SELECT computed_at FROM trend_runs WHERE week = ?", (run["week"],)
+            ).fetchone()
+            if old and datetime.fromisoformat(old[0]) > datetime.fromisoformat(run["computed_at"]):
+                raise ValueError("Cannot overwrite a newer trend run")
+            conn.execute(
+                "INSERT INTO trend_runs (week, computed_at, payload_json) VALUES (?, ?, ?) "
+                "ON CONFLICT(week) DO UPDATE SET computed_at = excluded.computed_at, "
+                "payload_json = excluded.payload_json",
+                (run["week"], run["computed_at"], json.dumps(run, allow_nan=False)),
+            )
+            conn.execute("DELETE FROM trend_snapshots WHERE week = ?", (run["week"],))
+            for record in records:
+                conn.execute(
+                    """
+                    INSERT INTO trend_snapshots (
+                        snapshot_id, week, trend_id, trend_type, trend_name,
+                        current_count, baseline_count, delta_percent, trend_score,
+                        computed_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record["snapshot_id"],
+                        record["week"],
+                        record["trend_id"],
+                        record["type"],
+                        record["name"],
+                        record["current_count"],
+                        record["baseline_count"],
+                        record["delta_percent"],
+                        record["trend_score"],
+                        record["computed_at"],
+                        json.dumps(record, ensure_ascii=False, allow_nan=False),
+                    ),
+                )
+
+    def list_trend_snapshots(self, week: str) -> list[dict[str, Any]]:
+        """Read unfiltered weekly candidates in deterministic score order."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json FROM trend_snapshots WHERE week = ? "
+                    "ORDER BY trend_score DESC, trend_type, trend_name",
+                    (week,),
+                )
+                .fetchall()
+            )
+            return [json.loads(row[0]) for row in rows]
+
+    def get_trend_run(self, week: str) -> dict[str, Any] | None:
+        """Distinguish a computed empty week from a week never computed."""
+        self._check_circuit()
+        with self._op_lock:
+            row = (
+                self._conn_manager.get_connection()
+                .execute("SELECT payload_json FROM trend_runs WHERE week = ?", (week,))
+                .fetchone()
+            )
+            return dict(json.loads(row[0])) if row else None
+
+    # ------------------------------------------------------------------
+    # Analyze Content
+    # ------------------------------------------------------------------
+
+    def query_analyses_in_window(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read current analyses and source identities in an inclusive UTC window.
+
+        Excludes soft-deleted knowledge items. Timestamp comparison uses
+        julianday so equivalent instants with different offsets compare correctly.
+        No pagination limit is applied to the analysis input.
+        """
+        self._check_circuit()
+        with self._op_lock:
+            conn = self._conn_manager.get_connection()
+            cursor = conn.execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.themes_json, a.entities_json,
+                       a.sentiment, a.key_claims_json, a.technical_depth, a.confidence,
+                       k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.analyzed_at) >= julianday(?)
+                  AND julianday(a.analyzed_at) <= julianday(?)
+                ORDER BY julianday(a.analyzed_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Pattern Discovery and History
+    # ------------------------------------------------------------------
+
+    def query_pattern_items(self, start: str, end: str) -> list[dict[str, Any]]:
+        """Read live analyses by stable first-persisted time in (start, end]."""
+        self._check_circuit()
+        with self._op_lock:
+            cursor = self._conn_manager.get_connection().execute(
+                """
+                SELECT a.knowledge_id, a.analyzed_at, a.created_at AS first_observed_at,
+                       a.themes_json, a.entities_json, a.sentiment, a.key_claims_json,
+                       a.technical_depth, a.confidence, k.source_type, k.source_name
+                FROM content_analyses AS a
+                JOIN knowledge_objects AS k ON k.id = a.knowledge_id
+                WHERE k.deleted_at IS NULL
+                  AND julianday(a.created_at) > julianday(?)
+                  AND julianday(a.created_at) <= julianday(?)
+                ORDER BY julianday(a.created_at), a.knowledge_id
+                """,
+                (start, end),
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def save_pattern_records(
+        self, records: list[dict[str, Any]], observed_at: str
+    ) -> list[dict[str, Any]]:
+        """Save current records and daily history atomically, preserving first detection.
+
+        Reject stale runs rather than allowing slow LLM responses to overwrite a
+        newer result. Records are JSON data; no service models enter storage.
+        """
+        self._check_circuit()
+        observed = datetime.fromisoformat(observed_at).astimezone(timezone.utc)
+        saved = []
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            for record in records:
+                item = dict(record)
+                old = conn.execute(
+                    "SELECT first_detected, updated_at FROM discovered_patterns "
+                    "WHERE pattern_id = ?",
+                    (item["pattern_id"],),
+                ).fetchone()
+                if old:
+                    if datetime.fromisoformat(old[1]) > observed:
+                        raise ValueError("Cannot overwrite a newer pattern observation")
+                    item["first_detected"] = old[0]
+                else:
+                    item["first_detected"] = observed.isoformat()
+                payload = json.dumps(item, ensure_ascii=False, allow_nan=False)
+                conn.execute(
+                    """
+                    INSERT INTO discovered_patterns VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(pattern_id) DO UPDATE SET
+                        updated_at = excluded.updated_at, payload_json = excluded.payload_json
+                    """,
+                    (
+                        item["pattern_id"],
+                        item["topic"],
+                        item["pattern_type"],
+                        item["time_window_days"],
+                        item["first_detected"],
+                        observed.isoformat(),
+                        payload,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO pattern_snapshots VALUES (?, ?, ?, ?)
+                    ON CONFLICT(pattern_id, observation_date) DO UPDATE SET
+                        observed_at = excluded.observed_at, payload_json = excluded.payload_json
+                    """,
+                    (
+                        item["pattern_id"],
+                        observed.date().isoformat(),
+                        observed.isoformat(),
+                        payload,
+                    ),
+                )
+                saved.append(item)
+        return saved
+
+    def query_pattern_history(self, pattern_id: str) -> list[dict[str, Any]]:
+        """Return daily pattern payloads in chronological UTC order."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT payload_json, observed_at FROM pattern_snapshots "
+                    "WHERE pattern_id = ? ORDER BY observation_date",
+                    (pattern_id,),
+                )
+                .fetchall()
+            )
+            return [dict(json.loads(payload), observed_at=observed) for payload, observed in rows]
+
+    # ------------------------------------------------------------------
+    # Cross-Source Groups
+    # ------------------------------------------------------------------
+
+    def replace_cross_source_groups(
+        self, time_window_days: int, rows: list[dict[str, Any]]
+    ) -> None:
+        """Atomically replace one window's current snapshot, including empty results.
+
+        Concurrent writers are serialized; the last successful replacement wins.
+        Other window lengths are independent. Storage accepts serialized records
+        and does not import analysis service models.
+        """
+        self._check_circuit()
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM cross_source_groups WHERE time_window_days = ?",
+                (time_window_days,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO cross_source_groups (
+                    group_id, time_window_days, topic, knowledge_ids_json,
+                    source_count, sources_json, first_seen, last_seen, coverage_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row["group_id"],
+                        time_window_days,
+                        row["topic"],
+                        row["knowledge_ids_json"],
+                        row["source_count"],
+                        row["sources_json"],
+                        row["first_seen"],
+                        row["last_seen"],
+                        row["coverage_score"],
+                    )
+                    for row in rows
+                ],
+            )
+
+    # ------------------------------------------------------------------
+    # Content Analysis
+    # ------------------------------------------------------------------
+
+    def query_unanalyzed(self, limit: int = 50) -> list[KnowledgeObject]:
+        """Query KnowledgeObjects that do not have a content analysis yet.
+
+        Args:
+            limit: Maximum number of items to return.
+
+        Returns:
+            List of KnowledgeObjects without content analysis,
+            ordered by created_at descending.
+        """
+        self._circuit_breaker.ensure_closed()
+
+        with self._conn_manager.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT *
+                FROM knowledge_objects
+                WHERE id NOT IN (SELECT knowledge_id FROM content_analyses)
+                  AND deleted_at IS NULL
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+
+        return [self._row_to_knowledge_object(row) for row in rows]
+
+    def save_analysis(
+        self,
+        analysis_id: str,
+        knowledge_id: str,
+        analyzed_at: str,
+        themes_json: str,
+        entities_json: str,
+        sentiment: str,
+        key_claims_json: str,
+        technical_depth: str,
+        confidence: float,
+    ) -> None:
+        """Upsert the latest analysis for a KnowledgeObject.
+
+        Repeated saves preserve the existing analysis ID and creation time.
+        Older results cannot overwrite a newer analysis.
+
+        Args:
+            analysis_id: Unique identifier for the analysis.
+            knowledge_id: ID of the analyzed KnowledgeObject.
+            analyzed_at: ISO timestamp of analysis.
+            themes_json: JSON-serialized themes list.
+            entities_json: JSON-serialized entities dict.
+            sentiment: Sentiment value.
+            key_claims_json: JSON-serialized key claims list.
+            technical_depth: Technical depth value.
+            confidence: Confidence score.
+        """
+        self._circuit_breaker.ensure_closed()
+
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO content_analyses (analysis_id, knowledge_id, analyzed_at,
+                                              themes_json, entities_json, sentiment,
+                                              key_claims_json, technical_depth, confidence,
+                                              created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(knowledge_id) DO
+                UPDATE SET
+                    analyzed_at = excluded.analyzed_at,
+                    themes_json = excluded.themes_json,
+                    entities_json = excluded.entities_json,
+                    sentiment = excluded.sentiment,
+                    key_claims_json = excluded.key_claims_json,
+                    technical_depth = excluded.technical_depth,
+                    confidence = excluded.confidence
+                WHERE julianday(excluded.analyzed_at) >= julianday(content_analyses.analyzed_at)
+                """,
+                (
+                    analysis_id,
+                    knowledge_id,
+                    analyzed_at,
+                    themes_json,
+                    entities_json,
+                    sentiment,
+                    key_claims_json,
+                    technical_depth,
+                    confidence,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # Internal Atomic Saves
     # ------------------------------------------------------------------
 
     @retry_on_transient_error(
-        max_retries=3,
-        base_delay=0.5,
-        retryable_exceptions=(sqlite3.OperationalError,),
+        exceptions=(sqlite3.OperationalError,),
     )
     def _save_objects_with_retry(self, objects: list[KnowledgeObject]) -> SaveResult:
         """Retry wrapper around the atomic save operation."""
@@ -1042,7 +1884,7 @@ class SQLiteKnowledgeStore:
                         )
                         continue
 
-                    existing_id, existing_hash = existing
+                    existing_id, existing_hash, existing_stars = existing
 
                     if existing_hash != obj.content_hash:
                         self._update_object(conn, existing_id, obj)
@@ -1052,6 +1894,13 @@ class SQLiteKnowledgeStore:
                             existing_id,
                             obj.external_id,
                         )
+                    elif obj.github_stars is not None and obj.github_stars != existing_stars:
+                        conn.execute(
+                            "UPDATE knowledge_objects SET github_stars = ?, updated_at = ? "
+                            "WHERE id = ?",
+                            (obj.github_stars, datetime.now(timezone.utc).isoformat(), existing_id),
+                        )
+                        updated += 1
                     else:
                         skipped += 1
                         logger.debug(
@@ -1078,15 +1927,15 @@ class SQLiteKnowledgeStore:
         source_type: str,
         source_name: str,
         external_id: str,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, int | None] | None:
         """Find existing record by identity triple.
 
         Returns:
-            Tuple of (id, content_hash), or None if not found.
+            Tuple of (id, content_hash, github_stars), or None if not found.
         """
         row = conn.execute(
             """
-            SELECT id, content_hash
+            SELECT id, content_hash, github_stars
             FROM knowledge_objects
             WHERE source_type = ? AND source_name = ? AND external_id = ?
             LIMIT 1
@@ -1097,7 +1946,7 @@ class SQLiteKnowledgeStore:
         if row is None:
             return None
 
-        return str(row[0]), str(row[1])
+        return str(row[0]), str(row[1]), row[2]
 
     def _insert_object(self, conn: sqlite3.Connection, obj: KnowledgeObject) -> None:
         """Insert a new KnowledgeObject."""
@@ -1119,9 +1968,10 @@ class SQLiteKnowledgeStore:
                 updated_at,
                 parser_version,
                 normalizer_version,
-                extractor_version
+                extractor_version,
+                github_stars
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 obj.id,
@@ -1140,6 +1990,7 @@ class SQLiteKnowledgeStore:
                 obj.parser_version,
                 obj.normalizer_version,
                 obj.extractor_version,
+                obj.github_stars,
             ),
         )
 
@@ -1165,7 +2016,8 @@ class SQLiteKnowledgeStore:
                 updated_at = ?,
                 parser_version = ?,
                 normalizer_version = ?,
-                extractor_version = ?
+                extractor_version = ?,
+                github_stars = COALESCE(?, github_stars)
             WHERE id = ?
             """,
             (
@@ -1179,9 +2031,14 @@ class SQLiteKnowledgeStore:
                 obj.parser_version,
                 obj.normalizer_version,
                 obj.extractor_version,
+                obj.github_stars,
                 existing_id,
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Internal Row Conversion
+    # ------------------------------------------------------------------
 
     def _row_to_knowledge_object(self, row: tuple[Any, ...]) -> KnowledgeObject:
         """Convert a SELECT row into a KnowledgeObject."""
@@ -1195,13 +2052,14 @@ class SQLiteKnowledgeStore:
             title=row[6],
             content_text=row[7],
             metadata=ExtractionResult.model_validate_json(row[8]),
-            fetched_at=self._parse_dt(row[9]),  # type: ignore[arg-type]
+            fetched_at=self._parse_dt(row[9]) or datetime.now(timezone.utc),
             published_at=self._parse_dt(row[10]),
-            created_at=self._parse_dt(row[11]),  # type: ignore[arg-type]
-            updated_at=self._parse_dt(row[12]),  # type: ignore[arg-type]
+            created_at=self._parse_dt(row[11]) or datetime.now(timezone.utc),
+            updated_at=self._parse_dt(row[12]) or datetime.now(timezone.utc),
             parser_version=row[13],
             normalizer_version=row[14],
             extractor_version=row[15],
+            github_stars=row[16],
             embedding_vector=None,
             vector_db_id=None,
         )

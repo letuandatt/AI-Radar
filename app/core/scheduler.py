@@ -1,9 +1,11 @@
 """Scheduler foundation and lifecycle state."""
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from app.core.exceptions import DuplicateJobError, handle_application_exception
@@ -35,14 +37,23 @@ class Job:
 
 
 class Scheduler:
-    """Owns scheduler initialization state.
+    """Owns scheduler initialization state and daily due-job tracking.
 
-    Job registration and execution are intentionally outside this scope.
+    Due-job logic (A2): ``get_due_jobs`` returns jobs whose schedule time has
+    been reached and that have not run yet today; ``mark_run`` records the
+    run. Last-run dates are persisted to ``state_file`` so a process restart
+    on the same day does not re-run a daily job.
+
+    Args:
+        state_file: Optional JSON file persisting per-job last-run dates.
+            ``None`` keeps the guard in memory only (unit tests).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, state_file: Path | None = None) -> None:
         self._state = SchedulerState.CREATED
         self._jobs: dict[str, Job] = {}
+        self._state_file = state_file
+        self._last_run_dates: dict[str, str] = self._load_last_run_dates()
 
     @property
     def state(self) -> SchedulerState:
@@ -118,7 +129,15 @@ class Scheduler:
         job_id: str,
         current_time: time,
     ) -> Any:
-        """Execute a registered job when its scheduled time is reached."""
+        """Execute a registered job when its scheduled time is reached.
+
+        This is the execution API for EXTERNAL scheduling systems (E1/D2):
+        a cron runner or dedicated entrypoint calls it per job. The
+        in-process loop (``run_application``) does not use it — that loop
+        goes through ``get_due_jobs`` + ``run_scheduled_cycle`` in
+        application.py, which isolate per-job failures instead of
+        propagating them.
+        """
         self._ensure_ready()
 
         job = self.get_job(job_id)
@@ -142,3 +161,64 @@ class Scheduler:
         logger.info("Job execution completed: %s", job.job_id)
 
         return result
+
+    def get_due_jobs(self, now: datetime) -> list[Job]:
+        """Return jobs due at ``now``: schedule reached and not run today.
+
+        Args:
+            now: Current wall-clock datetime (injected for testability).
+
+        Returns:
+            Jobs to run now, in registration order.
+        """
+        self._ensure_ready()
+
+        today = now.date().isoformat()
+        return [
+            job
+            for job in self._jobs.values()
+            if self._last_run_dates.get(job.job_id) != today and now.time() >= job.schedule
+        ]
+
+    def mark_run(self, job_id: str, now: datetime) -> None:
+        """Record that ``job_id`` started at ``now`` and persist the date.
+
+        Args:
+            job_id: Identifier of the job that started.
+            now: Current wall-clock datetime (injected for testability).
+
+        Raises:
+            KeyError: If the job is not registered.
+        """
+        self._ensure_ready()
+
+        if job_id not in self._jobs:
+            raise KeyError(f"Job '{job_id}' is not registered.")
+
+        self._last_run_dates[job_id] = now.date().isoformat()
+        self._save_last_run_dates()
+
+    def get_last_run_date(self, job_id: str) -> str | None:
+        """Return the ISO date the job last started, or None."""
+        return self._last_run_dates.get(job_id)
+
+    def _load_last_run_dates(self) -> dict[str, str]:
+        """Load persisted last-run dates; corrupt files degrade to empty."""
+        if self._state_file is None or not self._state_file.exists():
+            return {}
+        try:
+            data = json.loads(self._state_file.read_text(encoding="utf-8"))
+            return {str(key): str(value) for key, value in data.items()}
+        except (OSError, ValueError) as e:
+            logger.warning("Could not load scheduler state %s: %s", self._state_file, e)
+            return {}
+
+    def _save_last_run_dates(self) -> None:
+        """Persist last-run dates; failures are logged, never fatal."""
+        if self._state_file is None:
+            return
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            self._state_file.write_text(json.dumps(self._last_run_dates), encoding="utf-8")
+        except OSError as e:
+            logger.error("Could not save scheduler state %s: %s", self._state_file, e)

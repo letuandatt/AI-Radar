@@ -3,11 +3,11 @@
 Factory for creating embedding providers by name.
 """
 
+from app.core.circuit_breaker import CircuitBreaker
 from app.core.logger import get_logger
 from app.services.embedding.cohere_provider import CohereEmbeddingProvider
 from app.services.embedding.ollama_provider import OllamaEmbeddingProvider
 from app.services.embedding.provider import EmbeddingProvider
-from app.storage.knowledge.base import CircuitBreaker
 
 logger = get_logger(__name__)
 

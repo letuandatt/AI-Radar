@@ -1,4 +1,42 @@
-name: daily_digest.yml
+name: Daily Digest
+
 on:
+  schedule:
+    # 21:30 UTC daily = 04:30 Asia/Ho_Chi_Minh (UTC+7), after knowledge update
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
 
 jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+      # Zalo secrets required once D1 sends real digests:
+      # ZALO_APP_ID: ${{ secrets.ZALO_APP_ID }}
+      # ZALO_APP_SECRET: ${{ secrets.ZALO_APP_SECRET }}
+      # ZALO_ACCESS_TOKEN: ${{ secrets.ZALO_ACCESS_TOKEN }}
+      # ZALO_WEBHOOK_SECRET: ${{ secrets.ZALO_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Dry run (bootstrap check — no network, no LLM)
+        run: python scripts/send_digest.py --dry-run
+
+      - name: Send daily digest (no-op until D1)
+        run: python scripts/send_digest.py

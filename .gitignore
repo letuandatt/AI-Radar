@@ -1,14 +1,30 @@
 .env
+.env.email
 .venv/
 
 data/
-docs/private-docs/
 dev/
-working/
+dist/
+docs/private-docs/
 qdrant_storage/
+working/
+scripts/kaggle
 
 app/storage/knowledge/knowledge.db
+app/storage/knowledge/knowledge.db-shm
+app/storage/knowledge/knowledge.db-wal
+app/storage/scheduler_state.json
 app/storage/search/bm25_index.pkl
 
 __pycache__/
 *.py[cod]
+
+# Runtime run metrics
+app/storage/metrics/
+.env.web
+web/.env*
+!web/.env.example
+web/node_modules/
+web/coverage/
+web/playwright-report/
+web/test-results/

@@ -4,14 +4,40 @@ This module bridges the application settings and the RepositoryInitializer,
 keeping database-specific configuration details out of the application core.
 """
 
-from pathlib import Path
-
-from app.config.settings import Settings
+from app.config.settings import Settings, get_settings
 from app.core.logger import get_logger
+from app.services.analysis.content_analyzer import ContentAnalyzer
+from app.services.analysis.cross_source_analyzer import CrossSourceAnalyzer
+from app.services.analysis.pattern_discoverer import PatternDiscoverer
+from app.services.analysis.service import AnalysisService
 from app.services.repository.config import RepositoryConfig
 from app.services.repository.initializer import RepositoryInitializer
+from app.services.trend.identifier import TrendIdentifier
 
 logger = get_logger(__name__)
+
+
+def build_repository_config(settings: Settings) -> RepositoryConfig:
+    """Build the RepositoryConfig fully from application settings (E2/E3).
+
+    Storage paths and embedding provider are settings-driven so deployment
+    never depends on paths inside the source tree.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        RepositoryConfig for RepositoryInitializer.
+    """
+    return RepositoryConfig(
+        sqlite_path=settings.sqlite_path,
+        qdrant_url=settings.qdrant_url,
+        qdrant_collection="knowledge_objects",
+        bm25_index_path=settings.bm25_index_path,
+        embedding_provider_type=settings.embedding_provider,
+        ollama_base_url=settings.ollama_base_url,
+        cohere_api_key=settings.cohere_api_key or None,
+    )
 
 
 def initialize_knowledge_repository(settings: Settings) -> RepositoryInitializer:
@@ -23,15 +49,7 @@ def initialize_knowledge_repository(settings: Settings) -> RepositoryInitializer
     Returns:
         Initialized RepositoryInitializer instance.
     """
-    config = RepositoryConfig(
-        sqlite_path=Path("app/storage/knowledge/knowledge.db"),
-        qdrant_url=settings.qdrant_url,
-        qdrant_collection="knowledge_objects",
-        bm25_index_path=Path("app/storage/search/bm25_index.pkl"),
-        embedding_provider_type="ollama",
-        ollama_base_url="http://localhost:11434",
-        cohere_api_key=settings.cohere_api_key or None,
-    )
+    config = build_repository_config(settings)
 
     initializer = RepositoryInitializer(config)
 
@@ -121,4 +139,138 @@ def create_retrieval_service(initializer: "RepositoryInitializer"):
         bm25_index=initializer.bm25_index,
         sqlite_store=initializer.sqlite_store,
         filter_engine=filter_engine,
+    )
+
+
+def create_llm_chain(settings: Settings):
+    """Create the application-wide LLM provider chain from settings.
+
+    ONE chain is shared by analysis and extraction so both workloads share
+    one budget, one rate limiter and one fallback policy (provider order,
+    model names, budget and alert threshold all come from Settings).
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        LLMProviderChain configured from settings.
+    """
+    from app.integrations.llm.factory import LLMProviderFactory
+
+    return LLMProviderFactory.create(
+        primary_provider=settings.llm_primary_provider,
+        fallback_providers=settings.llm_fallback_providers or None,
+        ollama_model=settings.ollama_model,
+        groq_model=settings.groq_model,
+        groq_api_key=settings.groq_api_key,
+        daily_budget_usd=settings.llm_daily_budget_usd,
+        alert_percent=settings.llm_alert_percent,
+        rate_limit_rpm=settings.llm_rate_limit_rpm,
+        rate_limit_wait_timeout=settings.llm_rate_limit_wait_timeout,
+        daily_token_limit=settings.llm_daily_token_limit,
+        daily_request_limit=settings.llm_daily_request_limit,
+    )
+
+
+def create_manual_llm_chain(settings: Settings, *, shared_chain=None):
+    """Use Groq for manual adds without changing batch settings or falling back.
+
+    In the main runtime, reuse the application's budget and rate limiter.
+    A standalone runner owns its own chain with the configured usage limits.
+    Creating the chain does not send a model request.
+    """
+    if not settings.groq_api_key.get_secret_value().strip():
+        raise ValueError("Manual add requires GROQ_API_KEY in the backend environment")
+    if not settings.groq_model.strip():
+        raise ValueError("Manual add requires GROQ_MODEL in the backend environment")
+
+    if shared_chain is not None:
+        from app.integrations.llm.factory import LLMProviderFactory
+
+        chain = LLMProviderFactory.create_groq_view(
+            shared_chain, settings.groq_model, settings.groq_api_key
+        )
+    else:
+        manual_settings = settings.model_copy(
+            update={"llm_primary_provider": "groq", "llm_fallback_providers": []}
+        )
+        chain = create_llm_chain(manual_settings)
+    logger.info("Manual add LLM: provider=groq model=%s fallback=disabled", settings.groq_model)
+    return chain
+
+
+def create_analysis_service(
+    initializer: RepositoryInitializer, llm_chain, *, max_groups: int = 20
+) -> AnalysisService:
+    """Create the analysis component with shared repository and provider dependencies.
+
+    Args:
+        initializer: Initialized repository with all stores ready.
+        llm_chain: Shared LLM provider chain (see create_llm_chain) —
+            injected so analysis and extraction count against one budget.
+        max_groups: Maximum number of cross-source groups returned per call.
+
+    Returns:
+        AnalysisService preserving analyze()/analyze_batch() for existing callers.
+    """
+    from app.prompts.loader import PromptLoader
+    from app.services.repository.access_service import RepositoryAccessService
+
+    settings = get_settings()
+
+    access_service = RepositoryAccessService(initializer.sqlite_store)
+
+    prompt_loader = PromptLoader()
+
+    content = ContentAnalyzer(
+        access_service=access_service,
+        llm_provider=llm_chain,
+        prompt_loader=prompt_loader,
+        max_concurrent=settings.llm_max_concurrent,
+    )
+    cross_source = CrossSourceAnalyzer(access_service, llm_chain, max_groups=max_groups)
+    patterns = PatternDiscoverer(access_service, llm_chain, prompt_loader)
+    return AnalysisService(content=content, cross_source=cross_source, patterns=patterns)
+
+
+def create_trend_service(initializer: RepositoryInitializer, settings: Settings) -> TrendIdentifier:
+    """Wire deterministic trend identification without LLM or index dependencies."""
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return TrendIdentifier(
+        RepositoryAccessService(initializer.sqlite_store), min_count=settings.trend_min_count
+    )
+
+
+def create_importance_service(initializer: RepositoryInitializer, llm_chain, settings: Settings):
+    """Wire scoring to the existing repository and shared budget/provider chain."""
+    from app.services.importance.scorer import ImportanceScorer
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return ImportanceScorer(
+        RepositoryAccessService(initializer.sqlite_store), llm_chain, settings.importance
+    )
+
+
+def create_intelligence_service(initializer: RepositoryInitializer, llm_chain):
+    """Wire insight generation to the existing repository and shared LLM chain.
+
+    Construction performs no provider call or report generation. Composition is
+    exposed separately through IntelligenceComposer and its local runner.
+    """
+    from app.services.intelligence.insight_generator import InsightGenerator
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return InsightGenerator(RepositoryAccessService(initializer.sqlite_store), llm_chain)
+
+
+def create_digest_service(initializer: RepositoryInitializer, settings: Settings):
+    """Wire deterministic digest generation without provider calls or startup work."""
+    from app.services.digest.config import DigestConfig
+    from app.services.digest.generator import DailyDigestGenerator
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return DailyDigestGenerator(
+        RepositoryAccessService(initializer.sqlite_store),
+        DigestConfig(importance=settings.importance),
     )

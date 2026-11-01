@@ -1,0 +1,43 @@
+.article-content.article-body {
+  max-width: 72ch;
+  margin: 36px auto;
+  white-space: normal;
+  font-size: 17px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+
+.article-body > .tiny-label {
+  margin-bottom: 24px;
+  color: var(--muted);
+}
+
+.article-body p {
+  margin: 0 0 1.35em;
+  white-space: pre-wrap;
+}
+
+.article-body h3 {
+  margin: 1.8em 0 .7em;
+  font-size: 1.3em;
+  line-height: 1.4;
+  font-family: Georgia, serif;
+}
+
+.article-body ul {
+  margin: 0 0 1.4em;
+  padding-left: 1.5em;
+  list-style: disc;
+}
+
+.article-body li {
+  margin-bottom: .5em;
+  padding-left: .2em;
+}
+
+@media (max-width: 600px) {
+  .article-content.article-body {
+    font-size: 16px;
+    line-height: 1.8;
+  }
+}

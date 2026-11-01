@@ -8,6 +8,7 @@ HuggingFace), handling errors gracefully, and aggregating results.
 import time
 from datetime import datetime
 
+from app.config.settings import Settings
 from app.core.logger import get_logger
 from app.fetchers.github import GitHubFetcher
 from app.fetchers.github_parser import GitHubParser
@@ -20,6 +21,7 @@ from app.fetchers.registry import (
 )
 from app.fetchers.rss import RSSFetcher
 from app.fetchers.rss_parser import RSSParser
+from app.models.article import RawArticle
 from app.models.result import AcquisitionResult, SourceError
 from app.storage.history import save_acquisition_result
 
@@ -45,6 +47,7 @@ class DefaultAcquisitionPipeline:
         rss_registry: ConfigBasedSourceRegistry,
         github_registry: ConfigBasedGitHubRegistry,
         hf_registry: ConfigBasedHFRegistry,
+        settings: Settings | None = None,
     ) -> None:
         """Initialize the pipeline with the required registries.
 
@@ -52,10 +55,14 @@ class DefaultAcquisitionPipeline:
             rss_registry: Registry containing RSS sources.
             github_registry: Registry containing GitHub sources.
             hf_registry: Registry containing HuggingFace sources.
+            settings: Optional settings enabling source discovery
+                (github_discovery_enabled / hf_discovery_enabled, both
+                default False). None disables discovery.
         """
         self._rss_registry = rss_registry
         self._github_registry = github_registry
         self._hf_registry = hf_registry
+        self._settings = settings
 
         self._app_service = None
 
@@ -78,6 +85,7 @@ class DefaultAcquisitionPipeline:
         """
         start_time = time.time()
         errors: list[SourceError] = []
+        collected_articles: list[RawArticle] = []
         total_articles = 0
         successful_sources = 0
         failed_sources = 0
@@ -91,6 +99,7 @@ class DefaultAcquisitionPipeline:
             try:
                 raw_data = self._rss_fetcher.fetch_raw(source)
                 articles = self._rss_parser.parse(raw_data, source)
+                collected_articles.extend(articles)
                 total_articles += len(articles)
                 successful_sources += 1
                 logger.info(
@@ -121,6 +130,8 @@ class DefaultAcquisitionPipeline:
                 issues_data = self._github_fetcher.fetch_issues(repo)
                 issues = self._github_parser.parse_issues(issues_data, repo)
 
+                collected_articles.extend(commits)
+                collected_articles.extend(issues)
                 total_articles += len(commits) + len(issues)
                 successful_sources += 1
                 logger.info(
@@ -147,6 +158,7 @@ class DefaultAcquisitionPipeline:
             try:
                 data = self._hf_fetcher.fetch_json(hf_source)
                 articles = self._hf_parser.parse(data, hf_source)
+                collected_articles.extend(articles)
                 total_articles += len(articles)
                 successful_sources += 1
                 logger.info(
@@ -165,6 +177,29 @@ class DefaultAcquisitionPipeline:
                 errors.append(error)
                 logger.error("Failed to process HuggingFace source %s: %s", hf_source.name, e)
 
+        # Discovery sources (settings-driven, best-effort — C-extension of C1)
+        if self._settings is not None and (
+            self._settings.github_discovery_enabled or self._settings.hf_discovery_enabled
+        ):
+            try:
+                from app.fetchers.discovery import (
+                    fetch_github_discovery,
+                    fetch_huggingface_discovery,
+                )
+
+                gh_discovered = fetch_github_discovery(self._settings)
+                collected_articles.extend(gh_discovered)
+                total_articles += len(gh_discovered)
+                logger.info("GitHub discovery: %d articles", len(gh_discovered))
+
+                hf_discovered = fetch_huggingface_discovery(self._settings)
+                collected_articles.extend(hf_discovered)
+                total_articles += len(hf_discovered)
+                logger.info("HuggingFace discovery: %d articles", len(hf_discovered))
+            except Exception as e:
+                # Discovery must never break the main acquisition run
+                logger.error("Discovery fetch failed: %s", e)
+
         execution_time = time.time() - start_time
 
         result = AcquisitionResult(
@@ -175,6 +210,7 @@ class DefaultAcquisitionPipeline:
             total_articles=total_articles,
             execution_time=execution_time,
             errors=errors,
+            articles=collected_articles,
         )
 
         logger.info(
@@ -186,8 +222,6 @@ class DefaultAcquisitionPipeline:
             result.total_articles,
             result.execution_time,
         )
-
-        # self._save_objects_to_repository(knowledge_objects)
 
         try:
             save_acquisition_result(result)

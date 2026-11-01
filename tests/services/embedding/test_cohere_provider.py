@@ -4,11 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.core.circuit_breaker import CircuitBreaker
 from app.services.embedding.cohere_provider import (
     CohereEmbeddingProvider,
     EmbeddingError,
 )
-from app.storage.knowledge.base import CircuitBreaker
 
 
 @pytest.fixture

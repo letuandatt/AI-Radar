@@ -14,7 +14,7 @@ from app.services.embedding.factory import EmbeddingProviderFactory
 from app.services.embedding.provider import EmbeddingProvider
 from app.services.repository.config import RepositoryConfig
 from app.storage.knowledge.sqlite_store import SQLiteKnowledgeStore
-from app.storage.search.bm25_index import BM25Index
+from app.storage.search.bm25_index import BM25Document, BM25Index
 from app.storage.vector.index_config import VectorIndexConfig
 from app.storage.vector.qdrant_store import QdrantVectorStore
 
@@ -467,7 +467,12 @@ class RepositoryInitializer:
         return store
 
     def _init_bm25(self) -> BM25Index:
-        """Initialize BM25 index (load existing or create new)."""
+        """Initialize BM25 index (load existing or rebuild from SQLite).
+
+        The index is a derivative of SQLite (E2): when the pickle file is
+        missing but SQLite has data, the index is rebuilt and saved —
+        deleting the index file must never lose search capability.
+        """
         index = BM25Index(index_path=self._config.bm25_index_path)
 
         if self._config.bm25_index_path.exists():
@@ -477,9 +482,41 @@ class RepositoryInitializer:
                 index.document_count,
             )
         else:
-            logger.info("BM25 index file not found, starting with empty index")
+            documents = self._derive_bm25_documents()
+            if documents:
+                built = index.build(documents)
+                index.save()
+                logger.info(
+                    "BM25 index rebuilt from SQLite: %d documents (saved to %s)",
+                    built,
+                    self._config.bm25_index_path,
+                )
+            else:
+                logger.info("BM25 index file not found and SQLite empty, starting empty index")
 
         return index
+
+    def _derive_bm25_documents(self) -> list[BM25Document]:
+        """Derive BM25 documents from persisted KnowledgeObjects."""
+        assert self._sqlite_store is not None, "SQLite must be initialized before BM25"
+        try:
+            objects = self._sqlite_store.get_all()
+        except Exception as e:
+            logger.warning("Cannot read SQLite for BM25 rebuild: %s", e)
+            return []
+
+        documents: list[BM25Document] = []
+        for obj in objects:
+            text = f"{obj.title} {obj.content_text}"
+            documents.append(
+                BM25Document(
+                    id=obj.id,
+                    text=text,
+                    content_hash=obj.content_hash,
+                    published_at=obj.published_at,
+                )
+            )
+        return documents
 
     def _init_embedding_provider(self) -> EmbeddingProvider:
         """Initialize embedding provider using factory."""

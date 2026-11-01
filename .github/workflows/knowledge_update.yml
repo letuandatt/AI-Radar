@@ -1,4 +1,37 @@
-name: knowledge_update.yml
+name: Knowledge Update
+
 on:
+  schedule:
+    # 20:30 UTC daily = 03:30 Asia/Ho_Chi_Minh (UTC+7), before the digest run
+    - cron: "30 20 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: knowledge-update
+  cancel-in-progress: false
 
 jobs:
+  update-knowledge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Dry run (bootstrap check — no network, no LLM)
+        run: python scripts/update_knowledge.py --dry-run
+
+      - name: Run knowledge update
+        run: python scripts/update_knowledge.py

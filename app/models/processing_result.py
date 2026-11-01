@@ -34,5 +34,6 @@ class ProcessingResult(BaseModel):
     objects_updated: int = Field(default=0, description="Existing knowledge objects updated")
     failed_objects: int = Field(default=0, description="Articles that failed processing")
     skipped_objects: int = Field(default=0, description="Articles skipped (already stored)")
+    filtered_objects: int = Field(default=0, description="Articles rejected by the relevance gate")
     processing_duration: float = Field(..., description="Total processing time in seconds")
     errors: list[dict[str, Any]] = Field(default_factory=list, description="List of error details")

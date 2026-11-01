@@ -1,0 +1,252 @@
+.knowledge-section {
+  padding-bottom: 64px;
+}
+
+.knowledge-filters {
+  padding: 24px;
+  margin-bottom: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.search-line {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.knowledge-filters input:not([type=checkbox]),
+.sort-control select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px 14px;
+  color: var(--text);
+  background: var(--bg);
+  font-size: 14px;
+}
+
+.search-line > input {
+  flex: 1;
+}
+
+.knowledge-filters summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+  margin: 20px 0;
+}
+
+.filter-grid fieldset {
+  min-width: 0;
+}
+
+.filter-grid label,
+.filter-grid legend {
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.filter-grid legend {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.filter-grid label > input:not([type=checkbox]) {
+  margin: 6px 0 10px;
+}
+
+.filter-options {
+  max-height: 160px;
+  overflow: auto;
+}
+
+.filter-options .check-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.check-option input {
+  accent-color: var(--accent);
+}
+
+.filter-grid small {
+  color: var(--muted);
+}
+
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.form-error {
+  color: var(--text);
+  border-left: 3px solid var(--accent);
+  padding: 10px;
+}
+
+.sort-control {
+  font-size: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.knowledge-card-fields {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 18px;
+}
+
+.source-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.knowledge-card-fields .topic-tags {
+  margin: 0;
+}
+
+.knowledge-card-fields .topic-tags span {
+  padding: 5px 9px;
+}
+
+.relevance {
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 5px 10px;
+}
+
+.relevance.high {
+  color: var(--accent);
+  background: var(--raised);
+}
+
+.relevance.medium {
+  color: var(--text);
+}
+
+.relevance.low {
+  color: var(--muted);
+}
+
+.search-snippet {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.page-number {
+  min-width: 36px;
+  min-height: 40px;
+  border-radius: 8px;
+}
+
+.page-number[aria-current=page] {
+  color: var(--bg);
+  background: var(--text);
+}
+
+.knowledge-pagination {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metadata-section {
+  margin: 24px 0;
+}
+
+.metadata-section .topic-tags {
+  margin: 10px 0;
+}
+
+.detail-score {
+  margin: 24px 0;
+}
+
+.detail-skeleton {
+  display: grid;
+  gap: 24px;
+  margin: 30px 0;
+}
+
+.detail-skeleton > :first-child {
+  height: 70px;
+}
+
+.related-section {
+  border-top: 1px solid var(--line);
+  margin-top: 56px;
+  padding-top: 32px;
+}
+
+.related-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.related-grid .story-cover {
+  border-radius: 9px;
+  margin-bottom: 16px;
+}
+
+.related-grid h3 {
+  font-size: 19px;
+  line-height: 1.4;
+  margin: 14px 0;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-section .topic-tags span,
+.knowledge-detail .topic-tags span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1023px) {
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .knowledge-filters {
+    padding: 16px;
+  }
+
+  .search-line {
+    flex-wrap: wrap;
+  }
+
+  .filter-grid,
+  .related-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-section .section-heading {
+    flex-wrap: wrap;
+  }
+}

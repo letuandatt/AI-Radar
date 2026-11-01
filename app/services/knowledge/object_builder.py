@@ -70,6 +70,7 @@ class ObjectBuilder:
             try:
                 ko = KnowledgeObject(
                     source_type=article.source_type,
+                    github_stars=article.github_stars,
                     source_name=article.source_name,
                     external_id=article.article_id,
                     source_url=article.url,

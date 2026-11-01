@@ -73,13 +73,25 @@ class FileKnowledgeStore:
                 )
             elif existing.content_hash != obj.content_hash:
                 # UPDATE — content changed
-                self._objects[existing.id] = obj
+                self._objects[existing.id] = obj.model_copy(
+                    update={
+                        "id": existing.id,
+                        "github_stars": obj.github_stars
+                        if obj.github_stars is not None
+                        else existing.github_stars,
+                    }
+                )
                 updated += 1
                 logger.debug(
                     "Updated KnowledgeObject %s (external_id=%s)",
                     existing.id,
                     obj.external_id,
                 )
+            elif obj.github_stars is not None and obj.github_stars != existing.github_stars:
+                self._objects[existing.id] = existing.model_copy(
+                    update={"github_stars": obj.github_stars, "updated_at": obj.updated_at}
+                )
+                updated += 1
             else:
                 # SKIP — content unchanged
                 skipped += 1

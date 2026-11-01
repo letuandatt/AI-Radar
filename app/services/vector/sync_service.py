@@ -85,7 +85,7 @@ class VectorSyncService:
             obj.id,
             count,
         )
-        return count > 0  # type: ignore[no-any-return]
+        return count > 0
 
     # ------------------------------------------------------------------
     # Orphan Cleanup
@@ -227,4 +227,4 @@ class VectorSyncService:
 
         # Upsert batch
         count = self._vector_store.upsert_points(points)
-        return count  # type: ignore[no-any-return]
+        return count

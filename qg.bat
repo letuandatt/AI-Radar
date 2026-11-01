@@ -8,15 +8,15 @@ echo ========================================
 :: ---------------------------------------------------------
 echo [1/4] Ruff Format Check...
 ruff format --check .
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo [!] Formatting issues found. Attempting auto-format ^(ruff format .^)...
     ruff format .
 
     :: Check again to ensure formatting is now correct
     ruff format --check .
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [X] Auto-format failed. Please fix manually.
-        exit /b %errorlevel%
+        exit /b 1
     )
     echo [+] Auto-format successful!
 )
@@ -27,15 +27,15 @@ echo [+] Ruff Format passed.
 :: ---------------------------------------------------------
 echo [2/4] Ruff Check (Linting)...
 ruff check .
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo [!] Linting errors found. Attempting auto-fix ^(ruff check . --fix^)...
     ruff check . --fix
 
     :: Check again to ensure all fixable errors are gone
     ruff check .
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [X] Auto-fix incomplete. Unfixable linting errors remain. Please fix manually.
-        exit /b %errorlevel%
+        exit /b 1
     )
     echo [+] Auto-fix successful!
 )
@@ -46,9 +46,9 @@ echo [+] Ruff Check passed.
 :: ---------------------------------------------------------
 echo [3/4] Pytest...
 python -m pytest -q
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo [X] Pytest failed. Please fix the logic/tests manually.
-    exit /b %errorlevel%
+    exit /b 1
 )
 echo [+] Pytest passed.
 
@@ -57,9 +57,9 @@ echo [+] Pytest passed.
 :: ---------------------------------------------------------
 echo [4/4] Mypy (Type Checking)...
 python -m mypy app
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo [X] Mypy failed. Please fix the type hints manually.
-    exit /b %errorlevel%
+    exit /b 1
 )
 echo [+] Mypy passed.
 
@@ -69,3 +69,4 @@ echo [+] Mypy passed.
 echo ========================================
 echo   ALL QUALITY GATES PASSED!
 echo ========================================
+exit /b 0

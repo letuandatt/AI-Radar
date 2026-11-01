@@ -4,14 +4,14 @@ This service extracts structured metadata (topics, entities, summary,
 relevance_score) from NormalizedArticle objects using LLM.
 
 Architecture:
-- Uses LangChain for LLM abstraction (ARCH-002 multi-provider)
-- Async processing with semaphore-based concurrency control
+- Uses the LLMProvider protocol via LLMProviderChain (ARCH-002 multi-provider):
+  retry, circuit breaker, fallback, rate limiting and cost tracking are
+  provided by the chain — extraction must NOT call a raw LangChain model.
+- Async processing with semaphore-based concurrency control; sync provider
+  calls are bridged through asyncio.to_thread (same pattern as ContentAnalyzer).
 - Structured output via Pydantic schema (AI-001 + AI-004)
 - Content sanitization before LLM call (SEC-001)
 - Prompt template with <untrusted_data> boundary (ARCH-001)
-
-NOTE: Retry mechanism removed because we're using local Ollama, which has
-no rate limits or transient API errors. If Ollama crashes, retry won't help.
 """
 
 import asyncio
@@ -22,6 +22,7 @@ from typing import cast
 from langchain_core.prompts import PromptTemplate
 
 from app.core.logger import get_logger
+from app.integrations.llm.provider import LLMProvider
 from app.models.enriched_article import EnrichedArticle
 from app.models.metadata import ExtractionResult
 from app.models.normalized_article import NormalizedArticle
@@ -44,8 +45,9 @@ class ContentTooShortError(Exception):
 class MetadataExtractor:
     """Extracts structured metadata from articles using LLM.
 
-    This extractor uses LangChain for provider-agnostic LLM calls,
-    with async processing, semaphore-based concurrency control, and security sanitization.
+    All LLM calls go through the injected LLMProvider (LLMProviderChain in
+    production): one shared chain means one budget, one rate limiter and one
+    fallback policy across analysis and extraction.
 
     Thread Safety:
         Uses asyncio.Semaphore for concurrency control.
@@ -54,7 +56,7 @@ class MetadataExtractor:
 
     def __init__(
         self,
-        llm,
+        llm_provider: LLMProvider,
         sanitizer: ContentSanitizer,
         max_concurrent: int = 2,
         min_content_length: int = 50,
@@ -62,19 +64,17 @@ class MetadataExtractor:
         """Initialize the MetadataExtractor.
 
         Args:
-            llm: LangChain chat model (ChatOllama, ChatGoogleGenerativeAI or ChatGroq).
+            llm_provider: LLM provider (e.g. LLMProviderChain) providing
+                structured_chat with retry/budget/rate-limit protection.
             sanitizer: ContentSanitizer instance for SEC-001 pre-processing.
             max_concurrent: Maximum concurrent LLM calls (semaphore limit).
             min_content_length: Articles with content shorter than this are
                 skipped without calling the LLM.
         """
+        self._llm_provider = llm_provider
         self._sanitizer = sanitizer
         self._max_concurrent = max_concurrent
         self._min_content_length = min_content_length
-
-        # Create structured output chain (NO retry - local Ollama has no rate limits)
-        # .with_structured_output() forces LLM to return ExtractionResult schema
-        self._structured_llm = llm.with_structured_output(ExtractionResult)
 
         # Load prompt template from file (ARCH-001)
         self._prompt = self._load_prompt_template()
@@ -242,7 +242,7 @@ class MetadataExtractor:
         1. Pre-filter: skip if content too short
         2. Sanitize content (SEC-001)
         3. Build prompt with <untrusted_data> boundary
-        4. Call LLM with structured output
+        4. Call LLM provider structured_chat (asyncio.to_thread bridge)
         5. Return parsed ExtractionResult
 
         Args:
@@ -277,13 +277,13 @@ class MetadataExtractor:
         # Step 2: Sanitize content (SEC-001 pre-processing)
         sanitized_content = self._sanitizer.sanitize(article.content)
 
-        # Step 3: Build chain (prompt | structured_llm)
-        chain = self._prompt | self._structured_llm
-
-        # Step 4: Call LLM (async)
+        # Step 3+4: Build prompt, call provider in a worker thread
+        prompt_text = self._prompt.format(content_text=sanitized_content)
         result = cast(
             ExtractionResult,
-            cast(object, await chain.ainvoke({"content_text": sanitized_content})),
+            await asyncio.to_thread(
+                self._llm_provider.structured_chat, prompt_text, ExtractionResult
+            ),
         )
 
         elapsed = time.time() - start_time

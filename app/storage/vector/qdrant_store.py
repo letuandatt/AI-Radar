@@ -12,11 +12,9 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
+from app.core.circuit_breaker import CircuitBreaker
 from app.core.logger import get_logger
-from app.storage.knowledge.base import (
-    CircuitBreaker,
-    retry_on_transient_error,
-)
+from app.core.retry import retry_on_transient_error
 from app.storage.vector.base import VectorPoint
 from app.storage.vector.config import (
     QDRANT_BATCH_SIZE,
@@ -79,7 +77,7 @@ class QdrantVectorStore:
             failure_threshold=QDRANT_CIRCUIT_FAILURE_THRESHOLD,
             recovery_timeout=QDRANT_CIRCUIT_RECOVERY_TIMEOUT,
         )
-        self._client = QdrantClient(url=url, timeout=timeout)
+        self._client = QdrantClient(url=url, timeout=timeout, check_compatibility=False)
         self._index_config = index_config or VectorIndexConfig()
 
     # ------------------------------------------------------------------
@@ -153,7 +151,7 @@ class QdrantVectorStore:
     @retry_on_transient_error(
         max_retries=QDRANT_MAX_RETRIES,
         base_delay=QDRANT_RETRY_BASE_DELAY,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def _create_collection_with_retry(self, collection: str, dims: int) -> None:
         """Internal retry wrapper for collection creation."""
@@ -303,7 +301,7 @@ class QdrantVectorStore:
     @retry_on_transient_error(
         max_retries=QDRANT_MAX_RETRIES,
         base_delay=QDRANT_RETRY_BASE_DELAY,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def upsert_points(self, points: list[VectorPoint]) -> int:
         """Upsert vector points into the store.
@@ -352,7 +350,7 @@ class QdrantVectorStore:
     @retry_on_transient_error(
         max_retries=QDRANT_MAX_RETRIES,
         base_delay=QDRANT_RETRY_BASE_DELAY,
-        retryable_exceptions=(Exception,),
+        exceptions=(Exception,),
     )
     def delete_points(self, ids: Sequence[str]) -> int:
         """Delete vector points by their IDs.
@@ -496,7 +494,7 @@ class QdrantVectorStore:
             raise VectorStoreError(f"Failed to count points: {e}") from e
 
     # ------------------------------------------------------------------
-    # Vector Search (T164)
+    # Vector Search
     # ------------------------------------------------------------------
 
     def search_vectors(
@@ -624,7 +622,7 @@ class QdrantVectorStore:
         Returns:
             Number of points deleted.
         """
-        return self.delete_points(ids)  # type: ignore[no-any-return]
+        return self.delete_points(ids)
 
     def reindex_collection(self) -> int:
         """Delete all points from the collection (full clear).

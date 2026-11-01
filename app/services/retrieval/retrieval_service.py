@@ -74,50 +74,48 @@ class RetrievalService:
         metadata_filter: MetadataFilter | None = None,
         top_k: int = 10,
         method: str = RetrievalMethod.HYBRID.value,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> RetrievalResponse:
-        """Search the knowledge repository using the specified strategy.
+        """Search using the selected strategy and optional repository eligibility.
 
         Args:
             query: Search query text.
             metadata_filter: Optional metadata filter for pre-filtering.
             top_k: Maximum number of results to return.
             method: Retrieval method ("vector", "keyword", "hybrid").
+            candidate_ids: Repository-filtered eligible IDs; empty returns no results.
 
         Returns:
-            RetrievalResponse with enriched results.
+            Enriched retrieval results.
 
         Raises:
-            RetrievalQueryTooLongError: If query exceeds max length.
-            InvalidRetrievalMethodError: If method is invalid.
-            RetrievalServiceUnavailableError: If service is unavailable.
+            RetrievalQueryTooLongError: Query exceeds the supported length.
+            InvalidRetrievalMethodError: Method is unsupported.
+            RetrievalServiceUnavailableError: Retrieval is unavailable.
         """
-        # Validate query
         self._validate_query(query)
-
-        # Validate method
         retrieval_method = self._validate_method(method)
-
-        # Start timing
         start_time = time.perf_counter()
 
+        if candidate_ids == frozenset():
+            return RetrievalResponse(query=query, method=retrieval_method)
+
+        options = {"candidate_ids": candidate_ids} if candidate_ids is not None else {}
+
         try:
-            # Dispatch to appropriate strategy
             if retrieval_method == RetrievalMethod.VECTOR:
-                raw_results = self._search_vector(query, metadata_filter, top_k)
+                raw_results = self._search_vector(query, metadata_filter, top_k, **options)
             elif retrieval_method == RetrievalMethod.KEYWORD:
-                raw_results = self._search_keyword(query, top_k)  # type: ignore[assignment]
+                raw_results = self._search_keyword(query, top_k, **options)  # type: ignore[assignment]
             elif retrieval_method == RetrievalMethod.HYBRID:
-                raw_results = self._search_hybrid(query, metadata_filter, top_k)  # type: ignore[assignment]
+                raw_results = self._search_hybrid(query, metadata_filter, top_k, **options)  # type: ignore[assignment]
             else:
                 raise InvalidRetrievalMethodError(method)
 
-            # Enrich results with metadata from SQLite
             enriched_results = self._enrich_results(raw_results, retrieval_method)
-
-            # Calculate retrieval time
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-            # Build filter description
             filters_applied = None
             if metadata_filter is not None and not metadata_filter.is_empty():
                 filters_applied = metadata_filter.model_dump(exclude_none=True)
@@ -138,7 +136,6 @@ class RetrievalService:
                 len(enriched_results),
                 elapsed_ms,
             )
-
             return response
 
         except (RetrievalQueryTooLongError, InvalidRetrievalMethodError):
@@ -234,33 +231,48 @@ class RetrievalService:
         query: str,
         metadata_filter: MetadataFilter | None,
         top_k: int,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> list[VectorSearchResult]:
         """Execute vector-only search."""
         return self._vector_search.search(
             query=query,
             metadata_filter=metadata_filter,
             top_k=top_k,
+            **({"candidate_ids": candidate_ids} if candidate_ids is not None else {}),
         )
 
     def _search_keyword(
         self,
         query: str,
         top_k: int,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> list[BM25Result]:
-        """Execute keyword-only search (BM25)."""
-        return self._bm25_index.search(query=query, top_k=top_k)
+        """Execute keyword-only search."""
+        return self._bm25_index.search(
+            query=query,
+            top_k=top_k,
+            **({"candidate_ids": candidate_ids} if candidate_ids is not None else {}),
+        )
 
     def _search_hybrid(
         self,
         query: str,
         metadata_filter: MetadataFilter | None,
         top_k: int,
+        *,
+        candidate_ids: frozenset[str] | None = None,
     ) -> list[FusedResult]:
-        """Execute hybrid search (vector + BM25 fusion)."""
+        """Execute hybrid search."""
+        options: dict[str, Any] = (
+            {"candidate_ids": candidate_ids} if candidate_ids is not None else {}
+        )
         return self._fusion_retriever.hybrid_search(
             query=query,
             metadata_filter=metadata_filter,
             top_k=top_k,
+            **options,
         )
 
     # ------------------------------------------------------------------

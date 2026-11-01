@@ -161,7 +161,9 @@ class GitHubParser:
                 title = f"{full_name}: {description[:80]}"
 
             # Build content with repo metadata
-            stars = repo.get("stargazers_count", 0)
+            stars = repo.get("stargazers_count")
+            if isinstance(stars, bool) or not isinstance(stars, int) or stars < 0:
+                stars = None
             forks = repo.get("forks_count", 0)
             language = repo.get("language", "Unknown")
             topics = repo.get("topics", [])
@@ -189,6 +191,7 @@ class GitHubParser:
                     content=content,
                     published_date=published_date,
                     source_name=source_name,
+                    github_stars=stars,
                 )
             )
 

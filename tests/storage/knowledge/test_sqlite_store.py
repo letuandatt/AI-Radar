@@ -18,10 +18,10 @@ from typing import Any
 
 import pytest
 
+from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError, CircuitState
 from app.core.utils import compute_text_hash
 from app.models.knowledge_object import KnowledgeObject
 from app.models.metadata import ExtractionResult
-from app.storage.knowledge.base import CircuitBreaker, CircuitBreakerOpenError
 from app.storage.knowledge.knowledge_store import SaveResult
 from app.storage.knowledge.sqlite_store import SQLiteKnowledgeStore
 
@@ -368,7 +368,7 @@ class TestCircuitBreaker:
 
         # Successful operation
         store.save_objects([_make_knowledge_object()])
-        assert cb.state == CircuitBreaker.CLOSED
+        assert cb.state == CircuitState.CLOSED
         store.close()
 
 

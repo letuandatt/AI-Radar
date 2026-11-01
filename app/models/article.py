@@ -28,3 +28,4 @@ class RawArticle:
     content: str
     published_date: datetime | None
     source_name: str
+    github_stars: int | None = None
