@@ -224,7 +224,8 @@ class ImportanceScorer:
                 }
             )
         scores.sort(key=lambda score: (-score.final_score, score.knowledge_id))
-        self._access.save_importance_scores(scores)
+        scores = self._access.save_importance_scores(scores)
+        scores.sort(key=lambda score: (-score.final_score, score.knowledge_id))
         logger.info("Importance DONE: %d saved, %d refined", len(scores), selected)
         return scores
 
