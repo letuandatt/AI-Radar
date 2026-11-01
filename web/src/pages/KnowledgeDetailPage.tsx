@@ -17,6 +17,7 @@ import {
   storyUrl,
 } from '../components/shared/Reading';
 import { FeedbackButtons } from '../components/knowledge/FeedbackButtons';
+import { ArticleBody } from '../components/knowledge/ArticleBody';
 
 import './knowledge.css';
 
@@ -232,6 +233,15 @@ export function KnowledgeDetailPage() {
                 {String(value)}
               </p>
             ) : null;
+          }
+
+          if (field.key === 'content_text') {
+            return (
+              <ArticleBody
+                key={field.key}
+                text={String(value ?? '')}
+              />
+            );
           }
 
           return (
