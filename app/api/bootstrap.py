@@ -3,6 +3,7 @@
 from app.api.config import WebConfig
 from app.api.factory import WebServices, create_app
 from app.api.server import WebServer
+from app.services.feedback.service import FeedbackService
 from app.services.repository.access_service import RepositoryAccessService
 from app.services.repository.browse_service import BrowseService
 from app.storage.knowledge.browse_store import SQLiteBrowseStore
@@ -56,6 +57,7 @@ def start_web(
         ),
         retrieval,
         manual_add,
+        FeedbackService(access),
     )
     return WebServer(
         create_app(bound, config=config, subscribers=subscribers, webhook_secret=secret), config

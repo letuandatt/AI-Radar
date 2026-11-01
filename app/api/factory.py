@@ -12,10 +12,12 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.config import WebConfig
 from app.api.security import SecurityBoundary
+from app.api.v1.feedback import router as feedback_router
 from app.api.v1.models import ApiError
 from app.api.v1.routes import router
 from app.services.app_service import ApplicationService
 from app.services.email.subscriber_service import SubscriberService
+from app.services.feedback.service import FeedbackService
 from app.services.knowledge.manual_add_service import ManualAddService
 from app.services.repository.browse_service import BrowseService
 from app.services.repository.query_models import InvalidQueryError, RepositoryError
@@ -31,6 +33,7 @@ class WebServices:
     browse: BrowseService
     retrieval: RetrievalService | None = None
     manual_add: ManualAddService | None = None
+    feedback: FeedbackService | None = None
 
 
 def create_app(
@@ -55,6 +58,10 @@ def create_app(
     app.include_router(
         router,
         responses={code: {"model": ApiError} for code in (400, 401, 403, 404, 413, 422, 500, 503)},
+    )
+    app.include_router(
+        feedback_router,
+        responses={code: {"model": ApiError} for code in (401, 403, 404, 413, 415, 422, 500, 503)},
     )
     if subscribers is not None:
         from app.api.routes.email_webhook import create_router
@@ -87,7 +94,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=config.origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT"],
         allow_headers=["Content-Type", "Authorization"],
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.allowed_hosts)
