@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 MAX_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 10_000
 
+
 def readable_html(root: Tag) -> str:
     """Preserve block boundaries as plain text, with explicit heading/list markers.
 
