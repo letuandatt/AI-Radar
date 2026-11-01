@@ -137,3 +137,29 @@ def test_canonicalization_preserves_encoded_paths_and_query():
         "https://example.org/a%2Fb?q=x%2Fy"
     )
     assert canonical_url("https://example.org") == "https://example.org/"
+
+
+def test_html_preserves_reading_blocks_and_one_math_representation():
+    body = b"""
+    <article><h2>Abstract</h2>
+    <p>A sufficiently long research paragraph with <strong>important</strong> evidence.</p>
+    <p>Coverage improves from <math><semantics><mn>0.625</mn>
+    <annotation encoding="application/x-tex">0.625</annotation></semantics></math>.</p>
+    <ul><li><p>First useful finding.</p></li><li>Second useful finding.</li></ul>
+    <!-- This comment is not article text. -->
+    </article>"""
+    page = PublicPageFetcher._parse("https://example.org/paper", body, "text/html")
+
+    assert page.text.startswith("## Abstract\n\n")
+    assert "with important evidence." in page.text
+    assert "\n\nCoverage improves" in page.text
+    assert "• First useful finding.\n• Second useful finding." in page.text
+    assert page.text.count("0.625") == 1
+    assert "comment" not in page.text and "<strong>" not in page.text
+
+
+def test_plain_text_keeps_existing_paragraphs():
+    text = "The first paragraph contains enough readable material.\r\n\r\nSecond paragraph."
+    page = PublicPageFetcher._parse("https://example.org/text", text.encode(), "text/plain")
+
+    assert page.text == text.replace("\r\n", "\n")
