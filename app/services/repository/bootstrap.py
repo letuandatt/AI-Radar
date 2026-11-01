@@ -185,14 +185,11 @@ def create_manual_llm_chain(settings: Settings, *, shared_chain=None):
         raise ValueError("Manual add requires GROQ_MODEL in the backend environment")
 
     if shared_chain is not None:
-        from app.integrations.llm.groq_provider import GroqProvider
+        from app.integrations.llm.factory import LLMProviderFactory
 
-        provider = GroqProvider(
-            model_name=settings.groq_model,
-            api_key=settings.groq_api_key,
-            cost_tracker=shared_chain.cost_tracker,
+        chain = LLMProviderFactory.create_groq_view(
+            shared_chain, settings.groq_model, settings.groq_api_key
         )
-        chain = shared_chain.with_provider(provider)
     else:
         manual_settings = settings.model_copy(
             update={"llm_primary_provider": "groq", "llm_fallback_providers": []}
