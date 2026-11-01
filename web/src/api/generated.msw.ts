@@ -23,6 +23,7 @@ import type {
   BrowsePage,
   BrowseQuery,
   DigestView,
+  FeedbackRequest,
   ManualAddRequest,
   ManualAddResult,
   RepositoryStatistics,
@@ -30,7 +31,9 @@ import type {
   SearchRequest,
   SourceHealth,
   Status,
-  UISchema
+  UISchema,
+  UserFeedback,
+  UserPreferences
 } from './generated';
 
 
@@ -44,6 +47,8 @@ export const getGetLatestDigestResponseMock = (overrideResponse: Partial<Extract
         [faker.string.alphanumeric(5)]: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}})))
       }, total_items: faker.number.int(), ...overrideResponse})
 
+export const getGetFeedbackPreferencesResponseMock = (overrideResponse: Partial<Extract<UserPreferences, object>> = {}): UserPreferences => ({rated_items: faker.number.int({min: 0}), topics: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({not_useful: faker.number.int({min: 0}), topic: faker.string.alpha({length: {min: 10, max: 20}}), useful: faker.number.int({min: 0})})), ...overrideResponse})
+
 export const getGetHealthResponseMock = (overrideResponse: Partial<Extract<Status, object>> = {}): Status => ({status: faker.helpers.arrayElement(['ok','ready'] as const), ...overrideResponse})
 
 export const getListKnowledgeResponseMock = (overrideResponse: Partial<Extract<BrowsePage, object>> = {}): BrowsePage => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({content_hash: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), id: faker.string.alpha({length: {min: 10, max: 20}}), published_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), relevance_score: faker.number.float({min: 0, max: 1, fractionDigits: 2}), source_name: faker.string.alpha({length: {min: 10, max: 20}}), source_type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), topics: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined])})), undefined]), page_info: {has_next: faker.datatype.boolean(), has_prev: faker.datatype.boolean(), next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}),null,]), total: faker.helpers.arrayElement([faker.number.int(),null,])}, total: faker.number.int(), ...overrideResponse})
@@ -53,6 +58,10 @@ export const getAddKnowledgeResponseMock = (overrideResponse: Partial<Extract<Ma
 export const getFilterKnowledgeResponseMock = (overrideResponse: Partial<Extract<BrowsePage, object>> = {}): BrowsePage => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({content_hash: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), id: faker.string.alpha({length: {min: 10, max: 20}}), published_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), relevance_score: faker.number.float({min: 0, max: 1, fractionDigits: 2}), source_name: faker.string.alpha({length: {min: 10, max: 20}}), source_type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), topics: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined])})), undefined]), page_info: {has_next: faker.datatype.boolean(), has_prev: faker.datatype.boolean(), next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}),null,]), total: faker.helpers.arrayElement([faker.number.int(),null,])}, total: faker.number.int(), ...overrideResponse})
 
 export const getGetKnowledgeResponseMock = (overrideResponse: Partial<Extract<BrowseDetail, object>> = {}): BrowseDetail => ({content_text: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', fetched_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), metadata: {entities: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), relevance_score: faker.number.float({min: 0, max: 1, fractionDigits: 2}), summary: faker.string.alpha({length: {min: 10, max: 20}}), topics: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}})))}, published_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), source_name: faker.string.alpha({length: {min: 10, max: 20}}), source_type: faker.string.alpha({length: {min: 10, max: 20}}), source_url: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+export const getGetFeedbackResponseMock = (overrideResponse: Partial<Extract<UserFeedback, object>> = {}): UserFeedback => ({adjusted_score: faker.helpers.arrayElement([faker.number.float({min: 0, max: 1, fractionDigits: 2}),null,]), base_score: faker.helpers.arrayElement([faker.number.float({min: 0, max: 1, fractionDigits: 2}),null,]), knowledge_id: faker.string.alpha({length: {min: 10, max: 20}}), rating: faker.helpers.arrayElement([faker.helpers.arrayElement(['useful','not_useful'] as const),null,]), updated_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), ...overrideResponse})
+
+export const getSetFeedbackResponseMock = (overrideResponse: Partial<Extract<UserFeedback, object>> = {}): UserFeedback => ({adjusted_score: faker.helpers.arrayElement([faker.number.float({min: 0, max: 1, fractionDigits: 2}),null,]), base_score: faker.helpers.arrayElement([faker.number.float({min: 0, max: 1, fractionDigits: 2}),null,]), knowledge_id: faker.string.alpha({length: {min: 10, max: 20}}), rating: faker.helpers.arrayElement([faker.helpers.arrayElement(['useful','not_useful'] as const),null,]), updated_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), ...overrideResponse})
 
 export const getGetRelatedResponseMock = (overrideResponse: Partial<Extract<RetrievalResponse, object>> = {}): RetrievalResponse => ({filters_applied: faker.helpers.arrayElement([null,]), method: faker.string.alpha({length: {min: 10, max: 20}}), query: faker.string.alpha({length: {min: 10, max: 20}}), results: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({content_snippet: faker.string.alpha({length: {min: 10, max: 20}}), entities: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined]), knowledge_id: faker.string.alpha({length: {min: 10, max: 20}}), published_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), relevance_score: faker.number.float({fractionDigits: 2}), retrieval_method: faker.string.alpha({length: {min: 10, max: 20}}), source_name: faker.string.alpha({length: {min: 10, max: 20}}), source_type: faker.string.alpha({length: {min: 10, max: 20}}), source_url: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}),null,]), title: faker.string.alpha({length: {min: 10, max: 20}}), topics: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined])})), undefined]), retrieval_time_ms: faker.number.float({fractionDigits: 2}), total_matches: faker.number.int(), ...overrideResponse})
 
@@ -102,6 +111,18 @@ export const getGetLatestDigestMockHandler = (overrideResponse?: DigestView | ((
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetLatestDigestResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetFeedbackPreferencesMockHandler = (overrideResponse?: UserPreferences | ((info: Parameters<HttpResponseResolver>[0]) => Promise<UserPreferences> | UserPreferences), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/feedback/preferences', async (info: Parameters<HttpResponseResolver>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetFeedbackPreferencesResponseMock(),
       { status: 200
       })
   }, options)
@@ -162,6 +183,30 @@ export const getGetKnowledgeMockHandler = (overrideResponse?: BrowseDetail | ((i
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetKnowledgeResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetFeedbackMockHandler = (overrideResponse?: UserFeedback | ((info: Parameters<HttpResponseResolver<{ itemId: string }>>[0]) => Promise<UserFeedback> | UserFeedback), options?: RequestHandlerOptions) => {
+  return http.get<{ itemId: string }>('*/api/v1/knowledge/:itemId/feedback', async (info: Parameters<HttpResponseResolver<{ itemId: string }>>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetFeedbackResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getSetFeedbackMockHandler = (overrideResponse?: UserFeedback | ((info: Parameters<HttpResponseResolver<{ itemId: string }, FeedbackRequest>>[0]) => Promise<UserFeedback> | UserFeedback), options?: RequestHandlerOptions) => {
+  return http.put<{ itemId: string }, FeedbackRequest>('*/api/v1/knowledge/:itemId/feedback', async (info: Parameters<HttpResponseResolver<{ itemId: string }, FeedbackRequest>>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getSetFeedbackResponseMock(),
       { status: 200
       })
   }, options)
@@ -242,11 +287,14 @@ export const getAIRadarMock = () => [
   getGetDigestMockHandler(),
   getGetDigestHistoryMockHandler(),
   getGetLatestDigestMockHandler(),
+  getGetFeedbackPreferencesMockHandler(),
   getGetHealthMockHandler(),
   getListKnowledgeMockHandler(),
   getAddKnowledgeMockHandler(),
   getFilterKnowledgeMockHandler(),
   getGetKnowledgeMockHandler(),
+  getGetFeedbackMockHandler(),
+  getSetFeedbackMockHandler(),
   getGetRelatedMockHandler(),
   getGetReadinessMockHandler(),
   getSearchKnowledgeMockHandler(),

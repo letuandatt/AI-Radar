@@ -414,6 +414,21 @@ export interface DigestView {
   total_items: number;
 }
 
+export type FeedbackRequestRating = typeof FeedbackRequestRating[keyof typeof FeedbackRequestRating] | null;
+
+
+export const FeedbackRequestRating = {
+  useful: 'useful',
+  not_useful: 'not_useful',
+} as const;
+
+/**
+ * Set an absolute choice; null clears it. Repeated requests are idempotent.
+ */
+export interface FeedbackRequest {
+  rating: FeedbackRequestRating;
+}
+
 /**
  * A public article URL and an optional reader-supplied title.
  */
@@ -629,11 +644,50 @@ export interface Status {
 }
 
 /**
+ * One vote per distinct normalized topic per live article.
+ */
+export interface TopicPreference {
+  /** @minimum 0 */
+  not_useful: number;
+  topic: string;
+  /** @minimum 0 */
+  useful: number;
+}
+
+/**
  * Stable schema version for table/filter/detail consumers.
  */
 export interface UISchema {
   fields: SchemaField[];
   version?: 1;
+}
+
+export type UserFeedbackRating = typeof UserFeedbackRating[keyof typeof UserFeedbackRating] | null;
+
+
+export const UserFeedbackRating = {
+  useful: 'useful',
+  not_useful: 'not_useful',
+} as const;
+
+/**
+ * Current choice for one live article; scores are unknown until it is scored.
+ */
+export interface UserFeedback {
+  adjusted_score?: number | null;
+  base_score?: number | null;
+  knowledge_id: string;
+  rating: UserFeedbackRating;
+  updated_at: string | null;
+}
+
+/**
+ * Observed choices, not a learned profile; at most 50 most-voted topics.
+ */
+export interface UserPreferences {
+  /** @minimum 0 */
+  rated_items: number;
+  topics: TopicPreference[];
 }
 
 export type GetDigestParams = {
@@ -1036,6 +1090,108 @@ export function useGetLatestDigest<TData = Awaited<ReturnType<typeof getLatestDi
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetLatestDigestQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetFeedbackPreferencesUrl = () => {
+
+
+
+
+  return `/api/v1/feedback/preferences`
+}
+
+/**
+ * Summarize the single reader's explicit choices on live articles.
+ * @summary Get Preferences
+ */
+export const getFeedbackPreferences = async ( options?: Parameters<typeof apiFetch>[1]): Promise<UserPreferences> => {
+
+  return apiFetch<UserPreferences>(getGetFeedbackPreferencesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetFeedbackPreferencesQueryKey = () => {
+    return [
+    `/api/v1/feedback/preferences`
+    ] as const;
+    }
+
+
+export const getGetFeedbackPreferencesQueryOptions = <TData = Awaited<ReturnType<typeof getFeedbackPreferences>>, TError = ApiError>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedbackPreferences>>, TError, TData>>, request?: SecondParameter<typeof apiFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetFeedbackPreferencesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getFeedbackPreferences>>> = ({ signal }) => getFeedbackPreferences({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getFeedbackPreferences>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetFeedbackPreferencesQueryResult = NonNullable<Awaited<ReturnType<typeof getFeedbackPreferences>>>
+export type GetFeedbackPreferencesQueryError = ApiError
+
+
+export function useGetFeedbackPreferences<TData = Awaited<ReturnType<typeof getFeedbackPreferences>>, TError = ApiError>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedbackPreferences>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeedbackPreferences>>,
+          TError,
+          Awaited<ReturnType<typeof getFeedbackPreferences>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetFeedbackPreferences<TData = Awaited<ReturnType<typeof getFeedbackPreferences>>, TError = ApiError>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedbackPreferences>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeedbackPreferences>>,
+          TError,
+          Awaited<ReturnType<typeof getFeedbackPreferences>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetFeedbackPreferences<TData = Awaited<ReturnType<typeof getFeedbackPreferences>>, TError = ApiError>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedbackPreferences>>, TError, TData>>, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Preferences
+ */
+
+export function useGetFeedbackPreferences<TData = Awaited<ReturnType<typeof getFeedbackPreferences>>, TError = ApiError>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedbackPreferences>>, TError, TData>>, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetFeedbackPreferencesQueryOptions(options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -1546,6 +1702,198 @@ export function useGetKnowledge<TData = Awaited<ReturnType<typeof getKnowledge>>
 
 
 
+
+export const getGetFeedbackUrl = (itemId: string,) => {
+
+
+
+
+  return `/api/v1/knowledge/${itemId}/feedback`
+}
+
+/**
+ * Read the current choice without creating a feedback record.
+ * @summary Get Feedback
+ */
+export const getFeedback = async (itemId: string, options?: Parameters<typeof apiFetch>[1]): Promise<UserFeedback> => {
+
+  return apiFetch<UserFeedback>(getGetFeedbackUrl(itemId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetFeedbackQueryKey = (itemId: string,) => {
+    return [
+    `/api/v1/knowledge/${itemId}/feedback`
+    ] as const;
+    }
+
+
+export const getGetFeedbackQueryOptions = <TData = Awaited<ReturnType<typeof getFeedback>>, TError = ApiError>(itemId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedback>>, TError, TData>>, request?: SecondParameter<typeof apiFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetFeedbackQueryKey(itemId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getFeedback>>> = ({ signal }) => getFeedback(itemId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: itemId !== null && itemId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getFeedback>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetFeedbackQueryResult = NonNullable<Awaited<ReturnType<typeof getFeedback>>>
+export type GetFeedbackQueryError = ApiError
+
+
+export function useGetFeedback<TData = Awaited<ReturnType<typeof getFeedback>>, TError = ApiError>(
+ itemId: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedback>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof getFeedback>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetFeedback<TData = Awaited<ReturnType<typeof getFeedback>>, TError = ApiError>(
+ itemId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedback>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof getFeedback>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetFeedback<TData = Awaited<ReturnType<typeof getFeedback>>, TError = ApiError>(
+ itemId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedback>>, TError, TData>>, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Feedback
+ */
+
+export function useGetFeedback<TData = Awaited<ReturnType<typeof getFeedback>>, TError = ApiError>(
+ itemId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getFeedback>>, TError, TData>>, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetFeedbackQueryOptions(itemId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSetFeedbackUrl = (itemId: string,) => {
+
+
+
+
+  return `/api/v1/knowledge/${itemId}/feedback`
+}
+
+/**
+ * Set an absolute choice, or clear it with null; no implicit toggle or model call.
+ * @summary Set Feedback
+ */
+export const setFeedback = async (itemId: string,
+    feedbackRequest: FeedbackRequest, options?: Parameters<typeof apiFetch>[1]): Promise<UserFeedback> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return apiFetch<UserFeedback>(getSetFeedbackUrl(itemId),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(feedbackRequest)
+  }
+);}
+
+
+
+
+
+export const getSetFeedbackMutationKey = () => ['setFeedback'] as const;
+
+export const getSetFeedbackMutationOptions = <TError = ApiError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setFeedback>>, TError,SetFeedbackMutationVariables, TContext>, request?: SecondParameter<typeof apiFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof setFeedback>>, TError,SetFeedbackMutationVariables, TContext> => {
+
+const mutationKey = getSetFeedbackMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof setFeedback>>, SetFeedbackMutationVariables> = (props) => {
+          const {itemId,data} = props ?? {};
+
+          return  setFeedback(itemId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SetFeedbackMutationResult = NonNullable<Awaited<ReturnType<typeof setFeedback>>>
+    export type SetFeedbackMutationBody = FeedbackRequest
+    export type SetFeedbackMutationError = ApiError
+    export type SetFeedbackMutationVariables = {itemId: string;data: FeedbackRequest}
+
+    /**
+ * @summary Set Feedback
+ */
+export const useSetFeedback = <TError = ApiError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setFeedback>>, TError,SetFeedbackMutationVariables, TContext>, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof setFeedback>>,
+        TError,
+        SetFeedbackMutationVariables,
+        TContext
+      > => {
+      return useMutation(getSetFeedbackMutationOptions(options), queryClient);
+    }
 
 export const getGetRelatedUrl = (itemId: string,
     params?: GetRelatedParams,) => {
