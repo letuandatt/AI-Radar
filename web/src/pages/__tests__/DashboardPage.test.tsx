@@ -205,7 +205,11 @@ it('requests ten recent stories, pages, and resets the page when changing channe
 
   expect(urls[0].searchParams.get('limit')).toBe('10');
   expect(urls[0].searchParams.get('sort_field')).toBe(
-    'published_at',
+    'created_at',
+  );
+
+  expect(urls[0].searchParams.get('sort_direction')).toBe(
+    'desc',
   );
 
   await userEvent.click(
