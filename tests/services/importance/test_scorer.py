@@ -56,6 +56,7 @@ def setup(count=100, **config):
     data = inputs(count)
     access = MagicMock(spec=RepositoryAccessService)
     access.load_importance_inputs.return_value = data
+    access.save_importance_scores.side_effect = lambda scores: scores
     provider = MagicMock()
     config = ImportanceConfig(**config)
     service = ImportanceScorer(access, provider, config, clock=lambda: NOW)
