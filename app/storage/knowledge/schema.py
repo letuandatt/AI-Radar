@@ -275,10 +275,51 @@ CREATE INDEX IF NOT EXISTS idx_insights_date ON insights(report_date, insight_ty
 """
 
 # =============================================================================
+# Refined documents and digests are self-contained daily snapshots
+# =============================================================================
+
+CREATE_INTELLIGENCE_DOCUMENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS intelligence_documents (
+    report_date TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    refined_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+"""
+
+CREATE_DAILY_DIGESTS_TABLE = """
+CREATE TABLE IF NOT EXISTS daily_digests (
+    digest_id TEXT PRIMARY KEY,
+    digest_date TEXT NOT NULL UNIQUE,
+    generated_at TEXT NOT NULL,
+    total_items INTEGER NOT NULL CHECK (total_items >= 0),
+    sections_json TEXT NOT NULL,
+    topic_groups_json TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+"""
+
+# =============================================================================
+# Reader feedback
+# =============================================================================
+
+CREATE_USER_FEEDBACK_TABLE = """
+CREATE TABLE IF NOT EXISTS user_feedback (
+    knowledge_id TEXT PRIMARY KEY REFERENCES knowledge_objects(id) ON DELETE CASCADE,
+    rating TEXT NOT NULL CHECK (rating IN ('useful', 'not_useful')),
+    updated_at TEXT NOT NULL
+);
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_USER_FEEDBACK_TABLE,
+    CREATE_INTELLIGENCE_DOCUMENTS_TABLE,
+    CREATE_DAILY_DIGESTS_TABLE,
     CREATE_INSIGHT_RUNS_TABLE,
     CREATE_INSIGHTS_TABLE,
     IDX_INSIGHTS_DATE,

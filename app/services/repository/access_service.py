@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from app.core.logger import get_logger
+from app.models.feedback import FeedbackRating
 from app.models.knowledge_object import KnowledgeObject
 from app.services.repository.query_models import (
     InvalidQueryError,
@@ -35,8 +36,9 @@ if TYPE_CHECKING:
         ObservedKnowledgeItem,
         PatternSnapshot,
     )
+    from app.services.digest.models import DailyDigest
     from app.services.importance.models import ImportanceInputs, ImportanceScore
-    from app.services.intelligence.models import Insight, InsightRun
+    from app.services.intelligence.models import Insight, InsightRun, IntelligenceDocument
     from app.services.trend.models import TrendRun, TrendSnapshot
 
 logger = get_logger(__name__)
@@ -52,11 +54,15 @@ class RepositoryAccessService:
         sqlite_store: SQLiteKnowledgeStore instance.
     """
 
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
+
     def __init__(self, sqlite_store: SQLiteKnowledgeStore) -> None:
         self._store = sqlite_store
 
     # ------------------------------------------------------------------
-    # Read Operations
+    # Knowledge Reads and Search
     # ------------------------------------------------------------------
 
     def get_knowledge_item(self, item_id: str) -> KnowledgeDetailResponse | None:
@@ -73,6 +79,16 @@ class RepositoryAccessService:
             return None
 
         return self._to_detail_response(obj)
+
+    def get_knowledge_object(
+        self, item_id: str, *, include_deleted: bool = False
+    ) -> KnowledgeObject | None:
+        """Read an internal object for services; never serialize this method directly over HTTP."""
+        return self._store.get_by_id(item_id, include_deleted=include_deleted)
+
+    def find_content_duplicate(self, content_hash: str) -> KnowledgeObject | None:
+        """Find an existing live object with exactly the same normalized text."""
+        return self._store.get_by_content_hash(content_hash)
 
     def list_recent_items(self, limit: int = 50) -> KnowledgeListResponse:
         """List the most recent knowledge items.
@@ -175,7 +191,7 @@ class RepositoryAccessService:
             return self._search_page(query)
 
     # ------------------------------------------------------------------
-    # Statistics
+    # Statistics and Source Health
     # ------------------------------------------------------------------
 
     def get_statistics(self) -> RepositoryStatistics:
@@ -213,77 +229,301 @@ class RepositoryAccessService:
         ]
 
     # ------------------------------------------------------------------
-    # Private: Cursor-based Pagination
+    # Content Analysis
     # ------------------------------------------------------------------
 
-    def _search_cursor(self, query: KnowledgeQuery) -> KnowledgeListResponse:
-        """Execute cursor-based pagination search."""
-        # Fetch limit+1 to determine has_next
-        fetch_limit = query.limit + 1
+    def list_unanalyzed_items(self, limit: int = 50) -> list[KnowledgeObject]:
+        """List KnowledgeObjects that do not have a content analysis yet.
 
-        objects = self._store.query_by_cursor(
-            cursor=query.cursor,
-            limit=fetch_limit,
-            source_type=query.source_type,
-            source_name=query.source_name,
+        Args:
+            limit: Maximum number of items to return.
+
+        Returns:
+            List of unanalyzed KnowledgeObjects.
+        """
+        return self._store.query_unanalyzed(limit)
+
+    def save_content_analysis(self, result: "ContentAnalysisResult") -> None:
+        """Save a content analysis result.
+
+        Args:
+            result: The analysis result to persist.
+        """
+        import json
+        import uuid
+
+        analysis_id = str(uuid.uuid4())
+
+        self._store.save_analysis(
+            analysis_id=analysis_id,
+            knowledge_id=result.knowledge_id,
+            analyzed_at=result.analyzed_at.isoformat(),
+            themes_json=json.dumps(result.themes),
+            entities_json=json.dumps(result.entities.model_dump()),
+            sentiment=result.sentiment,
+            key_claims_json=json.dumps(result.key_claims),
+            technical_depth=result.technical_depth,
+            confidence=result.confidence,
         )
 
-        has_next = len(objects) > query.limit
-        items_objects = objects[: query.limit]
+    def list_items_in_window(self, days: int = 7) -> list["AnalyzedKnowledgeItem"]:
+        """Read analyses from [now - days, now], joined to live source identities.
 
-        items = [self._to_summary(obj) for obj in items_objects]
+        UTC analysis timestamps define the window, not publication timestamps.
+        Capture now once so both bounds describe the same read.
+        """
+        from app.services.analysis.models import AnalyzedKnowledgeItem
 
-        next_cursor = None
-        if has_next and items_objects:
-            next_cursor = self._to_iso(items_objects[-1].created_at)
-
-        return KnowledgeListResponse(
-            items=items,
-            total=None,
-            page_info=PageInfo(
-                next_cursor=next_cursor,
-                has_next=has_next,
-                has_prev=query.cursor is not None,
-                total=None,
-            ),
-        )
+        if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
+            raise ValueError("days must be a positive integer")
+        end = datetime.now(timezone.utc)
+        try:
+            start = end - timedelta(days=days)
+        except OverflowError as exc:
+            raise ValueError("days exceeds the supported datetime range") from exc
+        rows = self._store.query_analyses_in_window(start.isoformat(), end.isoformat())
+        return [
+            AnalyzedKnowledgeItem(
+                knowledge_id=row["knowledge_id"],
+                analyzed_at=row["analyzed_at"],
+                source_type=row["source_type"],
+                source_name=row["source_name"],
+                themes=json.loads(row["themes_json"]),
+                entities=json.loads(row["entities_json"]),
+                sentiment=row["sentiment"],
+                key_claims=json.loads(row["key_claims_json"]),
+                technical_depth=row["technical_depth"],
+                confidence=row["confidence"],
+            )
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------
-    # Private: Page-based Pagination
+    # Cross-Source Groups
     # ------------------------------------------------------------------
 
-    def _search_page(self, query: KnowledgeQuery) -> KnowledgeListResponse:
-        """Execute page-based pagination search."""
-        objects = self._store.query_by_metadata(
-            source_type=query.source_type,
-            source_name=query.source_name,
-            published_after=query.published_after,
-            published_before=query.published_before,
-            limit=query.limit,
-            offset=query.offset,
-        )
-
-        items = [self._to_summary(obj) for obj in objects]
-
-        # For page-based, we need total count
-        total = self._store.count()
-
-        has_next = (query.offset + query.limit) < total
-        has_prev = query.offset > 0
-
-        return KnowledgeListResponse(
-            items=items,
-            total=total,
-            page_info=PageInfo(
-                next_cursor=None,
-                has_next=has_next,
-                has_prev=has_prev,
-                total=total,
-            ),
-        )
+    def save_cross_source_groups(
+        self, groups: list["CrossSourceGroup"], time_window_days: int = 7
+    ) -> None:
+        """Replace all persisted groups for one window in a single transaction."""
+        if (
+            isinstance(time_window_days, bool)
+            or not isinstance(time_window_days, int)
+            or time_window_days <= 0
+        ):
+            raise ValueError("time_window_days must be a positive integer")
+        rows = [
+            {
+                "group_id": group.group_id,
+                "topic": group.topic,
+                "knowledge_ids_json": json.dumps(group.knowledge_ids),
+                "source_count": group.source_count,
+                "sources_json": json.dumps(group.sources),
+                "first_seen": group.first_seen.isoformat(),
+                "last_seen": group.last_seen.isoformat(),
+                "coverage_score": group.coverage_score,
+            }
+            for group in groups
+        ]
+        self._store.replace_cross_source_groups(time_window_days, rows)
 
     # ------------------------------------------------------------------
-    # Trend Identification
+    # Pattern Discovery and History
+    # ------------------------------------------------------------------
+
+    def list_pattern_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
+        """Read current analysis labels anchored to first persistence in (start, end]."""
+        from app.services.analysis.models import ObservedKnowledgeItem
+
+        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+            raise ValueError("Expected an ordered timezone-aware interval")
+        rows = self._store.query_pattern_items(
+            start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        )
+        items = []
+        for row in rows:
+            data = dict(row)
+            for field in ("themes", "entities", "key_claims"):
+                data[field] = json.loads(data.pop(f"{field}_json"))
+            items.append(ObservedKnowledgeItem.model_validate(data))
+        return items
+
+    def save_discovered_patterns(
+        self, patterns: list["DiscoveredPattern"], observed_at: datetime
+    ) -> list["DiscoveredPattern"]:
+        """Save one run and return records with their preserved first_detected values."""
+        from app.services.analysis.models import DiscoveredPattern
+
+        if observed_at.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware")
+        ids = [pattern.pattern_id for pattern in patterns]
+        if len(ids) != len(set(ids)):
+            raise ValueError("pattern IDs must be unique within a run")
+        records = self._store.save_pattern_records(
+            [pattern.model_dump(mode="json") for pattern in patterns],
+            observed_at.astimezone(timezone.utc).isoformat(),
+        )
+        return [DiscoveredPattern.model_validate(record) for record in records]
+
+    def get_pattern_history(self, pattern_id: str) -> list["PatternSnapshot"]:
+        """Read snapshots through the repository gateway, oldest first."""
+        from app.services.analysis.models import PatternSnapshot
+
+        return [
+            PatternSnapshot.model_validate(record)
+            for record in self._store.query_pattern_history(pattern_id)
+        ]
+
+    # ------------------------------------------------------------------
+    # Trend Runs and Snapshots
+    # ------------------------------------------------------------------
+
+    def list_trend_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
+        """Read live analyzed items in [start, end), anchored to first persistence."""
+        from app.services.analysis.models import ObservedKnowledgeItem
+
+        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+            raise ValueError("Expected an ordered timezone-aware interval")
+        rows = self._store.query_trend_items(
+            start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        )
+        items = []
+        for row in rows:
+            data = dict(row)
+            for field in ("themes", "entities", "key_claims"):
+                data[field] = json.loads(data.pop(f"{field}_json"))
+            items.append(ObservedKnowledgeItem.model_validate(data))
+        return items
+
+    def save_trend_snapshots(self, snapshots: list["TrendSnapshot"], *, run: "TrendRun") -> None:
+        """Validate a full weekly snapshot, then replace it and its run atomically."""
+        from app.services.trend.models import TrendRun, TrendSnapshot
+
+        run = TrendRun.model_validate(run.model_dump())
+        snapshots = [TrendSnapshot.model_validate(item.model_dump()) for item in snapshots]
+        if run.snapshot_count != len(snapshots):
+            raise ValueError("snapshot_count must match the complete candidate list")
+        if len({item.trend_id for item in snapshots}) != len(snapshots):
+            raise ValueError("Duplicate trend identity in one run")
+        for item in snapshots:
+            if (
+                item.week != run.week
+                or item.baseline_week != run.baseline_week
+                or item.computed_at != run.computed_at
+                or item.current_count > run.current_items
+                or item.baseline_count > run.baseline_items
+                or (item.comparison == "baseline_empty") != (run.baseline_items == 0)
+            ):
+                raise ValueError("Snapshot does not match run metadata")
+        self._store.save_trend_snapshots(
+            [item.model_dump(mode="json") for item in snapshots], run.model_dump(mode="json")
+        )
+
+    def list_trend_snapshots(self, week: str) -> list["TrendSnapshot"]:
+        """Return ALL weekly candidates, including below-threshold declines."""
+        from app.services.trend.models import TrendSnapshot, week_start
+
+        week_start(week)
+        return [TrendSnapshot.model_validate(row) for row in self._store.list_trend_snapshots(week)]
+
+    def get_trend_run(self, week: str) -> "TrendRun | None":
+        """Return run metadata, or None when this week has never been computed."""
+        from app.services.trend.models import TrendRun, week_start
+
+        week_start(week)
+        row = self._store.get_trend_run(week)
+        return TrendRun.model_validate(row) if row is not None else None
+
+    # ------------------------------------------------------------------
+    # Importance Scores
+    # ------------------------------------------------------------------
+
+    def load_importance_inputs(
+        self, knowledge_ids: list[str], start: datetime, end: datetime, week: str
+    ) -> "ImportanceInputs":
+        """Read scoring evidence once, keeping missing and empty history explicit."""
+        from app.services.importance.models import ImportanceInputs
+        from app.services.trend.models import week_start
+
+        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
+            raise ValueError("Expected an ordered timezone-aware scoring interval")
+        if week_start(week) + timedelta(days=7) > end:
+            raise ValueError("Trend context must be a completed UTC week")
+        data = self._store.load_importance_inputs(
+            knowledge_ids, start.isoformat(), end.isoformat(), week
+        )
+        wanted = set(knowledge_ids)
+        parsed = []
+        for row in data["analyses"]:
+            value = dict(row)
+            at = datetime.fromisoformat(value["analyzed_at"])
+            if value["knowledge_id"] not in wanted and not start <= at <= end:
+                continue
+            for key in ("themes", "entities", "key_claims"):
+                value[key] = json.loads(value.pop(f"{key}_json"))
+            parsed.append(value)
+        data["analyses"] = parsed
+        result = ImportanceInputs.model_validate(data)
+        run, trends = result.trend_run, result.trends
+        if run is None:
+            if trends:
+                raise ValueError("Trend snapshots have no run metadata")
+        elif (
+            run.week != week
+            or run.computed_at > end
+            or run.snapshot_count != len(trends)
+            or len({row.trend_id for row in trends}) != len(trends)
+            or any(
+                row.week != week
+                or row.computed_at != run.computed_at
+                or row.baseline_week != run.baseline_week
+                or row.current_count > run.current_items
+                or row.baseline_count > run.baseline_items
+                for row in trends
+            )
+        ):
+            raise ValueError("Inconsistent or future trend context")
+        return result
+
+    def save_importance_scores(self, scores: list["ImportanceScore"]) -> list["ImportanceScore"]:
+        """Validate every score before issuing one atomic store operation."""
+        from app.services.importance.models import ImportanceScore
+
+        validated = [ImportanceScore.model_validate(score.model_dump()) for score in scores]
+        if len({score.knowledge_id for score in validated}) != len(validated):
+            raise ValueError("Duplicate knowledge_id in importance batch")
+        saved = self._store.save_importance_scores(
+            [score.model_dump(mode="json") for score in validated]
+        )
+        return [ImportanceScore.model_validate(row) for row in saved]
+
+    def get_importance_score(self, knowledge_id: str) -> "ImportanceScore | None":
+        """Read a saved score; None means no score for a live knowledge item."""
+        from app.services.importance.models import ImportanceScore
+
+        row = self._store.get_importance_score(knowledge_id)
+        return ImportanceScore.model_validate(row) if row is not None else None
+
+    # ------------------------------------------------------------------
+    # Reader Feedback
+    # ------------------------------------------------------------------
+
+    def save_user_feedback(
+        self, knowledge_id: str, rating: FeedbackRating | None
+    ) -> dict[str, Any]:
+        """Persist the current choice together with any importance adjustment."""
+        return self._store.save_user_feedback(knowledge_id, rating)
+
+    def get_user_feedback(self, knowledge_id: str) -> dict[str, Any]:
+        """Read the current choice and score for one live knowledge item."""
+        return self._store.get_user_feedback(knowledge_id)
+
+    def list_user_feedback_topics(self) -> list[dict[str, Any]]:
+        """Read live rated items for preference aggregation."""
+        return self._store.list_user_feedback_topics()
+
+    # ------------------------------------------------------------------
+    # Daily Insight Reports
     # ------------------------------------------------------------------
 
     def load_intelligence_inputs(self, date: str) -> dict[str, Any]:
@@ -348,265 +588,162 @@ class RepositoryAccessService:
         _, rows = self.read_insight_report(date)
         return [row for row in rows if insight_type is None or row.insight_type == insight_type]
 
-    def load_importance_inputs(
-        self, knowledge_ids: list[str], start: datetime, end: datetime, week: str
-    ) -> "ImportanceInputs":
-        """Read scoring evidence once, keeping missing and empty history explicit."""
-        from app.services.importance.models import ImportanceInputs
-        from app.services.trend.models import week_start
+    # ------------------------------------------------------------------
+    # Refined Intelligence Documents
+    # ------------------------------------------------------------------
 
-        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
-            raise ValueError("Expected an ordered timezone-aware scoring interval")
-        if week_start(week) + timedelta(days=7) > end:
-            raise ValueError("Trend context must be a completed UTC week")
-        data = self._store.load_importance_inputs(
-            knowledge_ids, start.isoformat(), end.isoformat(), week
-        )
-        wanted = set(knowledge_ids)
-        parsed = []
-        for row in data["analyses"]:
-            value = dict(row)
-            at = datetime.fromisoformat(value["analyzed_at"])
-            if value["knowledge_id"] not in wanted and not start <= at <= end:
-                continue
-            for key in ("themes", "entities", "key_claims"):
-                value[key] = json.loads(value.pop(f"{key}_json"))
-            parsed.append(value)
-        data["analyses"] = parsed
-        result = ImportanceInputs.model_validate(data)
-        run, trends = result.trend_run, result.trends
-        if run is None:
-            if trends:
-                raise ValueError("Trend snapshots have no run metadata")
-        elif (
-            run.week != week
-            or run.computed_at > end
-            or run.snapshot_count != len(trends)
-            or len({row.trend_id for row in trends}) != len(trends)
-            or any(
-                row.week != week
-                or row.computed_at != run.computed_at
-                or row.baseline_week != run.baseline_week
-                or row.current_count > run.current_items
-                or row.baseline_count > run.baseline_items
-                for row in trends
-            )
-        ):
-            raise ValueError("Inconsistent or future trend context")
+    def save_intelligence_document(self, document: "IntelligenceDocument") -> None:
+        """Save validated refined blocks; never silently refine an unrefined input."""
+        from app.services.digest.models import validate_refined_document
+
+        validated = validate_refined_document(document)
+        self._store.save_intelligence_document(validated.model_dump(mode="json"))
+
+    def get_intelligence_document(self, date: str) -> "IntelligenceDocument | None":
+        """Read the most recently saved refinement for a report day."""
+        from app.services.digest.models import validate_refined_document
+        from app.services.intelligence.models import IntelligenceDocument, day_start
+
+        day_start(date)
+        row = self._store.get_intelligence_document(date)
+        if row is None:
+            return None
+        result = validate_refined_document(IntelligenceDocument.model_validate(row))
+        if result.date != date:
+            raise ValueError("Persisted intelligence report date mismatch")
         return result
 
-    def save_importance_scores(self, scores: list["ImportanceScore"]) -> None:
-        """Validate every score before issuing one atomic store operation."""
-        from app.services.importance.models import ImportanceScore
-
-        validated = [ImportanceScore.model_validate(score.model_dump()) for score in scores]
-        if len({score.knowledge_id for score in validated}) != len(validated):
-            raise ValueError("Duplicate knowledge_id in importance batch")
-        self._store.save_importance_scores([score.model_dump(mode="json") for score in validated])
-
-    def get_importance_score(self, knowledge_id: str) -> "ImportanceScore | None":
-        """Read a saved score; None means no score for a live knowledge item."""
-        from app.services.importance.models import ImportanceScore
-
-        row = self._store.get_importance_score(knowledge_id)
-        return ImportanceScore.model_validate(row) if row is not None else None
-
-    def list_trend_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
-        """Read live analyzed items in [start, end), anchored to first persistence."""
-        from app.services.analysis.models import ObservedKnowledgeItem
-
-        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
-            raise ValueError("Expected an ordered timezone-aware interval")
-        rows = self._store.query_trend_items(
-            start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
-        )
-        items = []
-        for row in rows:
-            data = dict(row)
-            for field in ("themes", "entities", "key_claims"):
-                data[field] = json.loads(data.pop(f"{field}_json"))
-            items.append(ObservedKnowledgeItem.model_validate(data))
-        return items
-
-    def save_trend_snapshots(self, snapshots: list["TrendSnapshot"], *, run: "TrendRun") -> None:
-        """Validate a full weekly snapshot, then replace it and its run atomically."""
-        from app.services.trend.models import TrendRun, TrendSnapshot
-
-        run = TrendRun.model_validate(run.model_dump())
-        snapshots = [TrendSnapshot.model_validate(item.model_dump()) for item in snapshots]
-        if run.snapshot_count != len(snapshots):
-            raise ValueError("snapshot_count must match the complete candidate list")
-        if len({item.trend_id for item in snapshots}) != len(snapshots):
-            raise ValueError("Duplicate trend identity in one run")
-        for item in snapshots:
-            if (
-                item.week != run.week
-                or item.baseline_week != run.baseline_week
-                or item.computed_at != run.computed_at
-                or item.current_count > run.current_items
-                or item.baseline_count > run.baseline_items
-                or (item.comparison == "baseline_empty") != (run.baseline_items == 0)
-            ):
-                raise ValueError("Snapshot does not match run metadata")
-        self._store.save_trend_snapshots(
-            [item.model_dump(mode="json") for item in snapshots], run.model_dump(mode="json")
-        )
-
-    def list_trend_snapshots(self, week: str) -> list["TrendSnapshot"]:
-        """Return ALL weekly candidates, including below-threshold declines."""
-        from app.services.trend.models import TrendSnapshot, week_start
-
-        week_start(week)
-        return [TrendSnapshot.model_validate(row) for row in self._store.list_trend_snapshots(week)]
-
-    def get_trend_run(self, week: str) -> "TrendRun | None":
-        """Return run metadata, or None when this week has never been computed."""
-        from app.services.trend.models import TrendRun, week_start
-
-        week_start(week)
-        row = self._store.get_trend_run(week)
-        return TrendRun.model_validate(row) if row is not None else None
-
     # ------------------------------------------------------------------
-    # Content Analysis Management
+    # Daily Digests
     # ------------------------------------------------------------------
 
-    def list_items_in_window(self, days: int = 7) -> list["AnalyzedKnowledgeItem"]:
-        """Read analyses from [now - days, now], joined to live source identities.
+    def load_digest_inputs(self, date: str) -> dict[str, Any]:
+        """Read a consistent document and publication cohort through the gateway."""
+        from app.services.digest.models import validate_refined_document
+        from app.services.intelligence.models import IntelligenceDocument, day_start
 
-        UTC analysis timestamps define the window, not publication timestamps.
-        Capture now once so both bounds describe the same read.
-        """
-        from app.services.analysis.models import AnalyzedKnowledgeItem
-
-        if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
-            raise ValueError("days must be a positive integer")
-        end = datetime.now(timezone.utc)
-        try:
-            start = end - timedelta(days=days)
-        except OverflowError as exc:
-            raise ValueError("days exceeds the supported datetime range") from exc
-        rows = self._store.query_analyses_in_window(start.isoformat(), end.isoformat())
-        return [
-            AnalyzedKnowledgeItem(
-                knowledge_id=row["knowledge_id"],
-                analyzed_at=row["analyzed_at"],
-                source_type=row["source_type"],
-                source_name=row["source_name"],
-                themes=json.loads(row["themes_json"]),
-                entities=json.loads(row["entities_json"]),
-                sentiment=row["sentiment"],
-                key_claims=json.loads(row["key_claims_json"]),
-                technical_depth=row["technical_depth"],
-                confidence=row["confidence"],
+        start = day_start(date)
+        data = self._store.load_digest_inputs(
+            date, start.isoformat(), (start + timedelta(days=1)).isoformat()
+        )
+        if data["document"] is not None:
+            data["document"] = validate_refined_document(
+                IntelligenceDocument.model_validate(data["document"])
             )
-            for row in rows
-        ]
+        return data
 
-    def list_pattern_items(self, start: datetime, end: datetime) -> list["ObservedKnowledgeItem"]:
-        """Read current analysis labels anchored to first persistence in (start, end]."""
-        from app.services.analysis.models import ObservedKnowledgeItem
+    def save_digest(
+        self,
+        digest: "DailyDigest",
+        *,
+        fingerprint: str,
+        rebuild: bool = False,
+        expected_id: str | None = None,
+    ) -> "DailyDigest":
+        """Validate the payload and atomically compare prerequisites before writing."""
+        from app.services.digest.models import DailyDigest
+        from app.services.intelligence.models import day_start
 
-        if start.utcoffset() is None or end.utcoffset() is None or start >= end:
-            raise ValueError("Expected an ordered timezone-aware interval")
-        rows = self._store.query_pattern_items(
-            start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+        validated = DailyDigest.model_validate(digest.model_dump())
+        start = day_start(validated.digest_date)
+        row = self._store.save_digest(
+            validated.model_dump(mode="json"),
+            start=start.isoformat(),
+            end=(start + timedelta(days=1)).isoformat(),
+            fingerprint=fingerprint,
+            rebuild=rebuild,
+            expected_id=expected_id,
         )
-        items = []
-        for row in rows:
-            data = dict(row)
-            for field in ("themes", "entities", "key_claims"):
-                data[field] = json.loads(data.pop(f"{field}_json"))
-            items.append(ObservedKnowledgeItem.model_validate(data))
-        return items
+        return DailyDigest.model_validate(row)
 
-    def save_discovered_patterns(
-        self, patterns: list["DiscoveredPattern"], observed_at: datetime
-    ) -> list["DiscoveredPattern"]:
-        """Save one run and return records with their preserved first_detected values."""
-        from app.services.analysis.models import DiscoveredPattern
+    def get_digest(self, date: str) -> "DailyDigest | None":
+        """Read a cached day; source changes do not silently rewrite archive history."""
+        from app.services.digest.models import DailyDigest
+        from app.services.intelligence.models import day_start
 
-        if observed_at.utcoffset() is None:
-            raise ValueError("observed_at must be timezone-aware")
-        ids = [pattern.pattern_id for pattern in patterns]
-        if len(ids) != len(set(ids)):
-            raise ValueError("pattern IDs must be unique within a run")
-        records = self._store.save_pattern_records(
-            [pattern.model_dump(mode="json") for pattern in patterns],
-            observed_at.astimezone(timezone.utc).isoformat(),
+        day_start(date)
+        row = self._store.get_digest(date)
+        if row is None:
+            return None
+        result = DailyDigest.model_validate(row)
+        if result.digest_date != date:
+            raise ValueError("Persisted digest date mismatch")
+        return result
+
+    def get_digest_history(self, limit: int = 30) -> list[str]:
+        """List up to 3650 cached report dates, newest first."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 3650:
+            raise ValueError("limit must be between 1 and 3650")
+        return self._store.get_digest_history(limit)
+
+    # ------------------------------------------------------------------
+    # Private Pagination Helpers
+    # ------------------------------------------------------------------
+
+    def _search_cursor(self, query: KnowledgeQuery) -> KnowledgeListResponse:
+        """Execute cursor-based pagination search."""
+        # Fetch limit+1 to determine has_next
+        fetch_limit = query.limit + 1
+
+        objects = self._store.query_by_cursor(
+            cursor=query.cursor,
+            limit=fetch_limit,
+            source_type=query.source_type,
+            source_name=query.source_name,
         )
-        return [DiscoveredPattern.model_validate(record) for record in records]
 
-    def get_pattern_history(self, pattern_id: str) -> list["PatternSnapshot"]:
-        """Read snapshots through the repository gateway, oldest first."""
-        from app.services.analysis.models import PatternSnapshot
+        has_next = len(objects) > query.limit
+        items_objects = objects[: query.limit]
 
-        return [
-            PatternSnapshot.model_validate(record)
-            for record in self._store.query_pattern_history(pattern_id)
-        ]
+        items = [self._to_summary(obj) for obj in items_objects]
 
-    def save_cross_source_groups(
-        self, groups: list["CrossSourceGroup"], time_window_days: int = 7
-    ) -> None:
-        """Replace all persisted groups for one window in a single transaction."""
-        if (
-            isinstance(time_window_days, bool)
-            or not isinstance(time_window_days, int)
-            or time_window_days <= 0
-        ):
-            raise ValueError("time_window_days must be a positive integer")
-        rows = [
-            {
-                "group_id": group.group_id,
-                "topic": group.topic,
-                "knowledge_ids_json": json.dumps(group.knowledge_ids),
-                "source_count": group.source_count,
-                "sources_json": json.dumps(group.sources),
-                "first_seen": group.first_seen.isoformat(),
-                "last_seen": group.last_seen.isoformat(),
-                "coverage_score": group.coverage_score,
-            }
-            for group in groups
-        ]
-        self._store.replace_cross_source_groups(time_window_days, rows)
+        next_cursor = None
+        if has_next and items_objects:
+            next_cursor = self._to_iso(items_objects[-1].created_at)
 
-    def list_unanalyzed_items(self, limit: int = 50) -> list[KnowledgeObject]:
-        """List KnowledgeObjects that do not have a content analysis yet.
+        return KnowledgeListResponse(
+            items=items,
+            total=None,
+            page_info=PageInfo(
+                next_cursor=next_cursor,
+                has_next=has_next,
+                has_prev=query.cursor is not None,
+                total=None,
+            ),
+        )
 
-        Args:
-            limit: Maximum number of items to return.
+    def _search_page(self, query: KnowledgeQuery) -> KnowledgeListResponse:
+        """Execute page-based pagination search."""
+        objects = self._store.query_by_metadata(
+            source_type=query.source_type,
+            source_name=query.source_name,
+            published_after=query.published_after,
+            published_before=query.published_before,
+            limit=query.limit,
+            offset=query.offset,
+        )
 
-        Returns:
-            List of unanalyzed KnowledgeObjects.
-        """
-        return self._store.query_unanalyzed(limit)
+        items = [self._to_summary(obj) for obj in objects]
 
-    def save_content_analysis(self, result: "ContentAnalysisResult") -> None:
-        """Save a content analysis result.
+        # For page-based, we need total count
+        total = self._store.count()
 
-        Args:
-            result: The analysis result to persist.
-        """
-        import json
-        import uuid
+        has_next = (query.offset + query.limit) < total
+        has_prev = query.offset > 0
 
-        analysis_id = str(uuid.uuid4())
-
-        self._store.save_analysis(
-            analysis_id=analysis_id,
-            knowledge_id=result.knowledge_id,
-            analyzed_at=result.analyzed_at.isoformat(),
-            themes_json=json.dumps(result.themes),
-            entities_json=json.dumps(result.entities.model_dump()),
-            sentiment=result.sentiment,
-            key_claims_json=json.dumps(result.key_claims),
-            technical_depth=result.technical_depth,
-            confidence=result.confidence,
+        return KnowledgeListResponse(
+            items=items,
+            total=total,
+            page_info=PageInfo(
+                next_cursor=None,
+                has_next=has_next,
+                has_prev=has_prev,
+                total=total,
+            ),
         )
 
     # ------------------------------------------------------------------
-    # Private: Response Converters
+    # Private Response Converters
     # ------------------------------------------------------------------
 
     def _to_summary(self, obj: KnowledgeObject) -> KnowledgeItemSummary:
@@ -643,6 +780,10 @@ class RepositoryAccessService:
             updated_at=obj.updated_at,
             citations=[obj.source_url] if obj.source_url else [],
         )
+
+    # ------------------------------------------------------------------
+    # Private Timestamp Serialization
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _to_iso(value: Any) -> str | None:

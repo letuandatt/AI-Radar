@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from app.config.importance import DigestCategory
+from app.models.feedback import FeedbackRating, adjusted_importance
 from app.models.knowledge_object import KnowledgeObject
 from app.services.analysis.models import AnalyzedKnowledgeItem
 from app.services.importance.config import ImportanceConfig, Unit
@@ -60,7 +61,8 @@ class ImportanceScore(BaseModel):
     """Latest score per knowledge item; reruns replace rather than duplicate it.
 
     Rule-only results retain rule_score. Refined results use 70% rule and 30% LLM.
-    Persisted config and context make the score interpretable after policy changes.
+    Version v2 applies one explicit +/-0.1 feedback adjustment after that base.
+    Persisted config, context and rating make the result auditable; v1 stays readable.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
@@ -72,7 +74,8 @@ class ImportanceScore(BaseModel):
     component_status: dict[str, SignalStatus]
     config: ImportanceConfig
     context: ScoreContext
-    score_version: Literal["v1"] = "v1"
+    score_version: Literal["v1", "v2"] = "v1"
+    feedback_rating: FeedbackRating | None = None
     llm_adjusted: bool = False
     llm_score: Unit | None = None
     llm_reason: str | None = None
@@ -91,6 +94,9 @@ class ImportanceScore(BaseModel):
         if self.llm_adjusted != bool(self.llm_reason and self.llm_reason.strip()):
             raise ValueError("Only refined scores have a nonempty LLM reason")
         final = 0.7 * expected + 0.3 * self.llm_score if self.llm_score is not None else expected
+        if self.score_version == "v1" and self.feedback_rating is not None:
+            raise ValueError("Feedback adjustments require score version v2")
+        final = adjusted_importance(final, self.feedback_rating)
         if not isclose(self.final_score, final, rel_tol=0, abs_tol=1e-12):
             raise ValueError("final_score must match the refinement formula")
         for key, status in self.component_status.items():

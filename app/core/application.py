@@ -30,6 +30,7 @@ from ..services.repository import (
 )
 from ..services.repository.bootstrap import (
     create_analysis_service,
+    create_digest_service,
     create_importance_service,
     create_intelligence_service,
     create_llm_chain,
@@ -332,6 +333,47 @@ def _shutdown_intelligence(service) -> None:
     logger.debug("Intelligence service shutdown (no-op)")
 
 
+def _init_digest():
+    """Expose digest generation after intelligence; do not generate on startup."""
+    assert _registry is not None, "ComponentRegistry must be initialized"
+    return create_digest_service(_registry.get_component("repository"), get_settings())
+
+
+def _shutdown_digest(service) -> None:
+    """Digest owns no independent resources."""
+    logger.debug("Digest service shutdown (no-op)")
+
+
+def _init_web():
+    """Start the optional web adapter after all of its dependencies."""
+    from app.api.bootstrap import start_web
+    from app.api.config import WebConfig
+    from app.services.repository.bootstrap import create_manual_llm_chain
+
+    config = WebConfig()
+    if not config.enabled:
+        return None
+    assert _registry is not None
+    settings = get_settings()
+    manual_chain = create_manual_llm_chain(
+        settings, shared_chain=_registry.get_component("llm_chain")
+    )
+    return start_web(
+        _registry.get_component("repository"),
+        _registry.get_component("app_service"),
+        _registry.get_component("retrieval"),
+        config,
+        llm_chain=manual_chain,
+        importance_config=settings.importance,
+    )
+
+
+def _shutdown_web(server) -> None:
+    """Drain HTTP work before the registry shuts down repository services."""
+    if server is not None:
+        server.stop()
+
+
 def start_application(lifecycle: ApplicationLifecycle) -> None:
     """Run bootstrap and advance the lifecycle to ``Running`` on success."""
     global _registry
@@ -370,6 +412,8 @@ def start_application(lifecycle: ApplicationLifecycle) -> None:
         _registry.register("trend", _init_trend, _shutdown_trend, priority=42)
         _registry.register("importance", _init_importance, _shutdown_importance, priority=43)
         _registry.register("intelligence", _init_intelligence, _shutdown_intelligence, priority=44)
+        _registry.register("digest", _init_digest, _shutdown_digest, priority=45)
+        _registry.register("web", _init_web, _shutdown_web, priority=70)
 
         # Start all components
         _registry.start_all()

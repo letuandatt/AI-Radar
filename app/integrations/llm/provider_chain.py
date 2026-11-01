@@ -83,6 +83,15 @@ class LLMProviderChain:
             )
         return decision.allowed
 
+    def with_provider(self, provider: LLMProvider) -> "LLMProviderChain":
+        """Use one provider without fallback, sharing this chain's usage controls."""
+        return LLMProviderChain(
+            [provider],
+            rate_limiter=self._rate_limiter,
+            rate_limit_wait_timeout=self._rate_limit_wait_timeout,
+            cost_tracker=self._cost_tracker,
+        )
+
     def chat(self, prompt: str, **kwargs: object) -> str:
         """Try each provider in order until one succeeds."""
         last_error: BaseException | None = None

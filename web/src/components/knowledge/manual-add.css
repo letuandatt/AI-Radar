@@ -1,0 +1,28 @@
+.manual-dialog {
+  width: min(580px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  margin: auto;
+  padding: 32px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 24px 90px #0006;
+}
+.manual-dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
+.manual-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.manual-heading .eyebrow { font-size: 10px; }
+.manual-dialog h2 { font-family: Georgia, serif; font-size: 36px; margin: 18px 0; }
+.manual-dialog p { font-size: 13px; line-height: 1.8; margin-bottom: 18px; overflow-wrap: anywhere; }
+.manual-dialog fieldset { border: 0; padding: 0; margin: 24px 0 0; min-width: 0; }
+.manual-dialog label { display: block; font-size: 13px; margin-bottom: 8px; }
+.manual-dialog input { width: 100%; min-height: 46px; padding: 12px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+.manual-actions { display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
+.manual-notice, .manual-result { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); }
+.manual-result h3 { font-size: 18px; margin: 0 0 14px; }
+.manual-dialog .icon-button { flex-shrink: 0; font-size: 24px; }
+@media (max-width: 600px) {
+  .manual-dialog { padding: 22px; }
+  .manual-dialog h2 { font-size: 30px; }
+}

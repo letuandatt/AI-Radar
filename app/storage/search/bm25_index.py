@@ -126,7 +126,9 @@ class BM25Index:
     # Search
     # ------------------------------------------------------------------
 
-    def search(self, query: str, top_k: int = 10) -> list[BM25Result]:
+    def search(
+        self, query: str, top_k: int = 10, *, candidate_ids: frozenset[str] | None = None
+    ) -> list[BM25Result]:
         """Search the BM25 index.
 
         BM25 is used for ranking, while lexical token matching determines
@@ -136,12 +138,13 @@ class BM25Index:
         Args:
             query: Search query string.
             top_k: Maximum number of results to return.
+            candidate_ids: Eligible IDs before ranking/truncation; empty matches nothing.
 
         Returns:
             List of BM25Result sorted by BM25 score descending.
         """
         with self._lock:
-            if self._bm25 is None or not self._doc_ids:
+            if candidate_ids == frozenset() or self._bm25 is None or not self._doc_ids:
                 return []
 
             query_tokens = tokenize(query)
@@ -149,16 +152,15 @@ class BM25Index:
                 return []
 
             query_token_set = set(query_tokens)
-
             scores = self._bm25.get_scores(query_tokens)
 
             # BM25 score alone is not a reliable relevance filter.
-            # rank_bm25 can legitimately produce zero/negative scores
-            # for matching terms depending on corpus statistics.
+            # Matching documents can legitimately have zero/negative scores.
             candidate_indices = [
                 i
                 for i, doc_id in enumerate(self._doc_ids)
-                if query_token_set.issubset(set(tokenize(self._documents[doc_id].text)))
+                if (candidate_ids is None or doc_id in candidate_ids)
+                and query_token_set.issubset(set(tokenize(self._documents[doc_id].text)))
             ]
 
             if not candidate_indices:
@@ -168,7 +170,6 @@ class BM25Index:
                 key=lambda i: scores[i],
                 reverse=True,
             )
-
             candidate_indices = candidate_indices[:top_k]
 
             return [

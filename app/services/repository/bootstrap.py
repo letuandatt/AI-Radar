@@ -172,6 +172,33 @@ def create_llm_chain(settings: Settings):
     )
 
 
+def create_manual_llm_chain(settings: Settings, *, shared_chain=None):
+    """Use Groq for manual adds without changing batch settings or falling back.
+
+    In the main runtime, reuse the application's budget and rate limiter.
+    A standalone runner owns its own chain with the configured usage limits.
+    Creating the chain does not send a model request.
+    """
+    if not settings.groq_api_key.get_secret_value().strip():
+        raise ValueError("Manual add requires GROQ_API_KEY in the backend environment")
+    if not settings.groq_model.strip():
+        raise ValueError("Manual add requires GROQ_MODEL in the backend environment")
+
+    if shared_chain is not None:
+        from app.integrations.llm.factory import LLMProviderFactory
+
+        chain = LLMProviderFactory.create_groq_view(
+            shared_chain, settings.groq_model, settings.groq_api_key
+        )
+    else:
+        manual_settings = settings.model_copy(
+            update={"llm_primary_provider": "groq", "llm_fallback_providers": []}
+        )
+        chain = create_llm_chain(manual_settings)
+    logger.info("Manual add LLM: provider=groq model=%s fallback=disabled", settings.groq_model)
+    return chain
+
+
 def create_analysis_service(
     initializer: RepositoryInitializer, llm_chain, *, max_groups: int = 20
 ) -> AnalysisService:
@@ -235,3 +262,15 @@ def create_intelligence_service(initializer: RepositoryInitializer, llm_chain):
     from app.services.repository.access_service import RepositoryAccessService
 
     return InsightGenerator(RepositoryAccessService(initializer.sqlite_store), llm_chain)
+
+
+def create_digest_service(initializer: RepositoryInitializer, settings: Settings):
+    """Wire deterministic digest generation without provider calls or startup work."""
+    from app.services.digest.config import DigestConfig
+    from app.services.digest.generator import DailyDigestGenerator
+    from app.services.repository.access_service import RepositoryAccessService
+
+    return DailyDigestGenerator(
+        RepositoryAccessService(initializer.sqlite_store),
+        DigestConfig(importance=settings.importance),
+    )
