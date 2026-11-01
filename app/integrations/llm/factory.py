@@ -20,6 +20,16 @@ class LLMProviderFactory:
     """Factory for creating LLM provider chains from settings."""
 
     @staticmethod
+    def create_groq_view(
+        shared_chain: LLMProviderChain, model_name: str, api_key: SecretStr
+    ) -> LLMProviderChain:
+        """Create an API-only view while retaining shared budget and rate limits."""
+        provider = GroqProvider(
+            model_name=model_name, api_key=api_key, cost_tracker=shared_chain.cost_tracker
+        )
+        return shared_chain.with_provider(provider)
+
+    @staticmethod
     def create(
         primary_provider: str = "ollama",
         fallback_providers: list[str] | None = None,
