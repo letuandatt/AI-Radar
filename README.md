@@ -142,14 +142,13 @@ The project documentation is organized into dedicated document sets.
 
 # ⚡ Getting Started
 
-The web interface is under active development on `feature/daily-intelligence`.
-The commands below target that branch and use **Windows PowerShell**.
+These instructions target the v0.5.0 release and use **Windows PowerShell**.
 Run Python commands from the repository root.
 
 ## 1. Clone the project
 
 ```powershell
-git clone --branch feature/daily-intelligence https://github.com/letuandatt/AI-Radar.git
+git clone --branch v0.5.0 https://github.com/letuandatt/AI-Radar.git
 cd AI-Radar
 ```
 
@@ -221,14 +220,14 @@ DIGEST_ENABLED=false
 ```
 
 Keep the other entries from `.env.example`: the settings model requires their
-presence. For this local Ollama setup, unused Groq, Cohere, and Zalo credential
-values can remain empty. Set real credentials only for integrations you enable.
+presence.
 
-The web example enables the API on `127.0.0.1:8000`, allows the local frontend
-origin, and keeps interactive API docs and email callbacks disabled.
+When the web API is enabled through the main application, configure
+`GROQ_API_KEY` and `GROQ_MODEL` in the backend `.env`. Manual article addition
+uses Groq for extraction, analysis, and importance scoring, with no local-model
+fallback. Batch processing continues to use the configured LLM provider chain.
 
-Keep `.env`, `.env.web`, provider keys, and database credentials on the backend.
-Do not put them in `web/` or `VITE_*` variables.
+Cohere and Zalo credentials can remain empty when those integrations are disabled.
 
 #### Start Qdrant and Ollama
 
