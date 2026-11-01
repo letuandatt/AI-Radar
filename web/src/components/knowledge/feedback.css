@@ -1,0 +1,19 @@
+.story-feedback {
+  margin: 36px 0;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.story-feedback h2 { margin: 12px 0; font-family: Georgia, serif; font-size: 27px; }
+.story-feedback p { font-size: 13px; line-height: 1.8; margin: 12px 0; }
+.feedback-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 20px 0; }
+.feedback-actions .pill-button { display: inline-flex; align-items: center; gap: 8px; }
+.feedback-actions .pill-button[aria-pressed="true"],
+.feedback-actions .pill-button[aria-pressed="true"]:hover { color: var(--bg); background: var(--text); border-color: var(--text); }
+.story-feedback button:disabled { opacity: .55; cursor: wait; }
+.feedback-error { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 4px; }
+@media (max-width: 600px) {
+  .story-feedback { padding: 20px; }
+  .story-feedback h2 { font-size: 24px; }
+}

@@ -16,6 +16,7 @@ import {
   safeUrl,
   storyUrl,
 } from '../components/shared/Reading';
+import { FeedbackButtons } from '../components/knowledge/FeedbackButtons';
 
 import './knowledge.css';
 
@@ -240,6 +241,7 @@ export function KnowledgeDetailPage() {
           );
         })}
 
+      <FeedbackButtons key={`feedback-${id}`} knowledgeId={id} />
       <RelatedItems key={id} id={id} backTo={backTo} />
     </article>
   );
