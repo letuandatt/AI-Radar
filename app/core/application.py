@@ -348,16 +348,23 @@ def _init_web():
     """Start the optional web adapter after all of its dependencies."""
     from app.api.bootstrap import start_web
     from app.api.config import WebConfig
+    from app.services.repository.bootstrap import create_manual_llm_chain
 
     config = WebConfig()
     if not config.enabled:
         return None
     assert _registry is not None
+    settings = get_settings()
+    manual_chain = create_manual_llm_chain(
+        settings, shared_chain=_registry.get_component("llm_chain")
+    )
     return start_web(
         _registry.get_component("repository"),
         _registry.get_component("app_service"),
         _registry.get_component("retrieval"),
         config,
+        llm_chain=manual_chain,
+        importance_config=settings.importance,
     )
 
 
