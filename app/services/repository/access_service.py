@@ -79,6 +79,16 @@ class RepositoryAccessService:
 
         return self._to_detail_response(obj)
 
+    def get_knowledge_object(
+        self, item_id: str, *, include_deleted: bool = False
+    ) -> KnowledgeObject | None:
+        """Read an internal object for services; never serialize this method directly over HTTP."""
+        return self._store.get_by_id(item_id, include_deleted=include_deleted)
+
+    def find_content_duplicate(self, content_hash: str) -> KnowledgeObject | None:
+        """Find an existing live object with exactly the same normalized text."""
+        return self._store.get_by_content_hash(content_hash)
+
     def list_recent_items(self, limit: int = 50) -> KnowledgeListResponse:
         """List the most recent knowledge items.
 

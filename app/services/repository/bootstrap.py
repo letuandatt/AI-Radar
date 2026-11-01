@@ -172,6 +172,36 @@ def create_llm_chain(settings: Settings):
     )
 
 
+def create_manual_llm_chain(settings: Settings, *, shared_chain=None):
+    """Use Groq for manual adds without changing batch settings or falling back.
+
+    In the main runtime, reuse the application's budget and rate limiter.
+    A standalone runner owns its own chain with the configured usage limits.
+    Creating the chain does not send a model request.
+    """
+    if not settings.groq_api_key.get_secret_value().strip():
+        raise ValueError("Manual add requires GROQ_API_KEY in the backend environment")
+    if not settings.groq_model.strip():
+        raise ValueError("Manual add requires GROQ_MODEL in the backend environment")
+
+    if shared_chain is not None:
+        from app.integrations.llm.groq_provider import GroqProvider
+
+        provider = GroqProvider(
+            model_name=settings.groq_model,
+            api_key=settings.groq_api_key,
+            cost_tracker=shared_chain.cost_tracker,
+        )
+        chain = shared_chain.with_provider(provider)
+    else:
+        manual_settings = settings.model_copy(
+            update={"llm_primary_provider": "groq", "llm_fallback_providers": []}
+        )
+        chain = create_llm_chain(manual_settings)
+    logger.info("Manual add LLM: provider=groq model=%s fallback=disabled", settings.groq_model)
+    return chain
+
+
 def create_analysis_service(
     initializer: RepositoryInitializer, llm_chain, *, max_groups: int = 20
 ) -> AnalysisService:
