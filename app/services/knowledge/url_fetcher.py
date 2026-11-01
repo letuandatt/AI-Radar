@@ -8,10 +8,60 @@ from dataclasses import dataclass
 from urllib.parse import urljoin
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 10_000
+
+def readable_html(root: Tag) -> str:
+    """Preserve block boundaries as plain text, with explicit heading/list markers.
+
+    Inline elements retain their surrounding text spacing. No source HTML is
+    stored or executed; markers are only a small plain-text reading convention.
+    """
+    for math in root.find_all("math"):
+        fallback = math.get_text(" ", strip=True)
+        for annotation in math.find_all(["annotation", "annotation-xml"]):
+            annotation.decompose()
+        math.replace_with(math.get_text(" ", strip=True) or fallback)
+
+    for text_node in list(root.find_all(string=True)):
+        if type(text_node) is NavigableString:
+            text_node.replace_with(re.sub(r"\s+", " ", str(text_node)))
+
+    for node in root.find_all("br"):
+        node.replace_with("\n")
+
+    for node in root.find_all(
+        [
+            "p",
+            "div",
+            "section",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ul",
+            "ol",
+            "li",
+            "blockquote",
+            "pre",
+            "tr",
+        ]
+    ):
+        in_list_item = node.find_parent("li") is not None
+        boundary = "\n" if node.name == "li" else " " if in_list_item else "\n\n"
+        node.insert_before(boundary)
+        if node.name != "li":
+            node.insert_after(boundary)
+        if not in_list_item and node.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            node.insert(0, "## ")
+        elif node.name == "li":
+            node.insert(0, "• ")
+
+    return root.get_text("", strip=False)
 
 
 class FetchError(ValueError):
@@ -160,10 +210,16 @@ class PublicPageFetcher:
             for node in soup.select("script,style,noscript,iframe,svg,nav,header,footer,form"):
                 node.decompose()
             root = soup.find("article") or soup.find("main") or soup.body or soup
-            text = root.get_text(" ", strip=True)
-        text = re.sub(r"\s+", " ", text).strip()
+            text = readable_html(root)
+
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[^\S\n]+", " ", text)
+        text = re.sub(r" *\n *", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
         if len(text) < 50:
             raise FetchError("The page has too little readable text")
+
         return FetchedPage(
             url, " ".join(title.split())[:300], text[:MAX_TEXT], len(text) > MAX_TEXT
         )
