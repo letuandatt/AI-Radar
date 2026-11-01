@@ -1,3 +1,5 @@
+/** Landing page: stories ordered by when they were added to the collection. */
+
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Sparkles } from 'lucide-react';
@@ -30,11 +32,12 @@ export function DashboardPage() {
   const [channel, setChannel] = useState(0);
   const [offset, setOffset] = useState(0);
 
-  const feed = useListKnowledge(
+    const feed = useListKnowledge(
     {
       limit: 10,
       offset,
-      sort_field: 'published_at',
+      sort_field: 'created_at',
+      sort_direction: 'desc',
       source_types: channels[channel].sources,
     },
     { query: { retry: false } },
@@ -134,7 +137,7 @@ export function DashboardPage() {
             <span className="tiny-label">
               THE READING LIST
             </span>
-            <h2>Fresh perspectives</h2>
+            <h2>New in your collection</h2>
           </div>
 
           <span className="muted">
