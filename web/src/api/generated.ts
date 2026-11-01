@@ -414,6 +414,66 @@ export interface DigestView {
   total_items: number;
 }
 
+/**
+ * A public article URL and an optional reader-supplied title.
+ */
+export interface ManualAddRequest {
+  title?: string | null;
+  /**
+     * @minLength 1
+     * @maxLength 2048
+     */
+  url: string;
+}
+
+export type ManualAddResultAnalysis = typeof ManualAddResultAnalysis[keyof typeof ManualAddResultAnalysis];
+
+
+export const ManualAddResultAnalysis = {
+  ready: 'ready',
+  failed: 'failed',
+  unchanged: 'unchanged',
+} as const;
+
+export type ManualAddResultImportance = typeof ManualAddResultImportance[keyof typeof ManualAddResultImportance];
+
+
+export const ManualAddResultImportance = {
+  ready: 'ready',
+  failed: 'failed',
+  skipped: 'skipped',
+  unchanged: 'unchanged',
+} as const;
+
+export type ManualAddResultIndexing = typeof ManualAddResultIndexing[keyof typeof ManualAddResultIndexing];
+
+
+export const ManualAddResultIndexing = {
+  ready: 'ready',
+  partial: 'partial',
+  unchanged: 'unchanged',
+} as const;
+
+export type ManualAddResultStatus = typeof ManualAddResultStatus[keyof typeof ManualAddResultStatus];
+
+
+export const ManualAddResultStatus = {
+  created: 'created',
+  existing: 'existing',
+} as const;
+
+/**
+ * SQLite persistence and optional downstream outcomes are reported separately.
+ */
+export interface ManualAddResult {
+  analysis: ManualAddResultAnalysis;
+  content_truncated?: boolean;
+  importance: ManualAddResultImportance;
+  indexing: ManualAddResultIndexing;
+  knowledge_id: string;
+  status: ManualAddResultStatus;
+}
+
 export type RepositoryStatisticsByDateRange = {[key: string]: number};
 
 export type RepositoryStatisticsBySource = {[key: string]: number};
@@ -1206,6 +1266,95 @@ export function useListKnowledge<TData = Awaited<ReturnType<typeof listKnowledge
 
 
 
+
+export const getAddKnowledgeUrl = () => {
+
+
+
+
+  return `/api/v1/knowledge`
+}
+
+/**
+ * Add one URL; network and provider credentials stay in backend services.
+ * @summary Add Knowledge
+ */
+export const addKnowledge = async (manualAddRequest: ManualAddRequest, options?: Parameters<typeof apiFetch>[1]): Promise<ManualAddResult> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return apiFetch<ManualAddResult>(getAddKnowledgeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(manualAddRequest)
+  }
+);}
+
+
+
+
+
+export const getAddKnowledgeMutationKey = () => ['addKnowledge'] as const;
+
+export const getAddKnowledgeMutationOptions = <TError = ApiError | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addKnowledge>>, TError,AddKnowledgeMutationVariables, TContext>, request?: SecondParameter<typeof apiFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof addKnowledge>>, TError,AddKnowledgeMutationVariables, TContext> => {
+
+const mutationKey = getAddKnowledgeMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof addKnowledge>>, AddKnowledgeMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  addKnowledge(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AddKnowledgeMutationResult = NonNullable<Awaited<ReturnType<typeof addKnowledge>>>
+    export type AddKnowledgeMutationBody = ManualAddRequest
+    export type AddKnowledgeMutationError = ApiError | void
+    export type AddKnowledgeMutationVariables = {data: ManualAddRequest}
+
+    /**
+ * @summary Add Knowledge
+ */
+export const useAddKnowledge = <TError = ApiError | void,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addKnowledge>>, TError,AddKnowledgeMutationVariables, TContext>, request?: SecondParameter<typeof apiFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof addKnowledge>>,
+        TError,
+        AddKnowledgeMutationVariables,
+        TContext
+      > => {
+      return useMutation(getAddKnowledgeMutationOptions(options), queryClient);
+    }
 
 export const getFilterKnowledgeUrl = () => {
 

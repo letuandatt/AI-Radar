@@ -862,6 +862,95 @@
         "title": "IntelligenceSection",
         "type": "object"
       },
+      "ManualAddRequest": {
+        "additionalProperties": false,
+        "description": "A public article URL and an optional reader-supplied title.",
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "ManualAddRequest",
+        "type": "object"
+      },
+      "ManualAddResult": {
+        "description": "SQLite persistence and optional downstream outcomes are reported separately.",
+        "properties": {
+          "analysis": {
+            "enum": [
+              "ready",
+              "failed",
+              "unchanged"
+            ],
+            "title": "Analysis",
+            "type": "string"
+          },
+          "content_truncated": {
+            "default": false,
+            "title": "Content Truncated",
+            "type": "boolean"
+          },
+          "importance": {
+            "enum": [
+              "ready",
+              "failed",
+              "skipped",
+              "unchanged"
+            ],
+            "title": "Importance",
+            "type": "string"
+          },
+          "indexing": {
+            "enum": [
+              "ready",
+              "partial",
+              "unchanged"
+            ],
+            "title": "Indexing",
+            "type": "string"
+          },
+          "knowledge_id": {
+            "title": "Knowledge Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "created",
+              "existing"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "knowledge_id",
+          "status",
+          "indexing",
+          "analysis",
+          "importance"
+        ],
+        "title": "ManualAddResult",
+        "type": "object"
+      },
       "PageInfo": {
         "description": "Pagination metadata for list responses.\n\nAttributes:\n    next_cursor: Cursor for the next page (cursor-based pagination).\n    has_next: Whether there are more items after this page.\n    has_prev: Whether there are items before this page.\n    total: Total number of items (page-based pagination only).",
         "properties": {
@@ -1903,6 +1992,119 @@
           }
         },
         "summary": "Knowledge"
+      },
+      "post": {
+        "description": "Add one URL; network and provider credentials stay in backend services.",
+        "operationId": "addKnowledge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualAddRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualAddResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Busy or item in trash"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "description": "JSON required"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Add Knowledge"
       }
     },
     "/api/v1/knowledge/search": {

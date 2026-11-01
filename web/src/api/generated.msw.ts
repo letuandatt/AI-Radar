@@ -23,6 +23,8 @@ import type {
   BrowsePage,
   BrowseQuery,
   DigestView,
+  ManualAddRequest,
+  ManualAddResult,
   RepositoryStatistics,
   RetrievalResponse,
   SearchRequest,
@@ -45,6 +47,8 @@ export const getGetLatestDigestResponseMock = (overrideResponse: Partial<Extract
 export const getGetHealthResponseMock = (overrideResponse: Partial<Extract<Status, object>> = {}): Status => ({status: faker.helpers.arrayElement(['ok','ready'] as const), ...overrideResponse})
 
 export const getListKnowledgeResponseMock = (overrideResponse: Partial<Extract<BrowsePage, object>> = {}): BrowsePage => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({content_hash: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), id: faker.string.alpha({length: {min: 10, max: 20}}), published_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), relevance_score: faker.number.float({min: 0, max: 1, fractionDigits: 2}), source_name: faker.string.alpha({length: {min: 10, max: 20}}), source_type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), topics: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined])})), undefined]), page_info: {has_next: faker.datatype.boolean(), has_prev: faker.datatype.boolean(), next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}),null,]), total: faker.helpers.arrayElement([faker.number.int(),null,])}, total: faker.number.int(), ...overrideResponse})
+
+export const getAddKnowledgeResponseMock = (overrideResponse: Partial<Extract<ManualAddResult, object>> = {}): ManualAddResult => ({analysis: faker.helpers.arrayElement(['ready','failed','unchanged'] as const), content_truncated: faker.datatype.boolean(), importance: faker.helpers.arrayElement(['ready','failed','skipped','unchanged'] as const), indexing: faker.helpers.arrayElement(['ready','partial','unchanged'] as const), knowledge_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.helpers.arrayElement(['created','existing'] as const), ...overrideResponse})
 
 export const getFilterKnowledgeResponseMock = (overrideResponse: Partial<Extract<BrowsePage, object>> = {}): BrowsePage => ({items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({content_hash: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), id: faker.string.alpha({length: {min: 10, max: 20}}), published_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z',null,]), relevance_score: faker.number.float({min: 0, max: 1, fractionDigits: 2}), source_name: faker.string.alpha({length: {min: 10, max: 20}}), source_type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), topics: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), undefined])})), undefined]), page_info: {has_next: faker.datatype.boolean(), has_prev: faker.datatype.boolean(), next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}),null,]), total: faker.helpers.arrayElement([faker.number.int(),null,])}, total: faker.number.int(), ...overrideResponse})
 
@@ -122,6 +126,18 @@ export const getListKnowledgeMockHandler = (overrideResponse?: BrowsePage | ((in
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getListKnowledgeResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getAddKnowledgeMockHandler = (overrideResponse?: ManualAddResult | ((info: Parameters<HttpResponseResolver<PathParams, ManualAddRequest>>[0]) => Promise<ManualAddResult> | ManualAddResult), options?: RequestHandlerOptions) => {
+  return http.post<PathParams, ManualAddRequest>('*/api/v1/knowledge', async (info: Parameters<HttpResponseResolver<PathParams, ManualAddRequest>>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getAddKnowledgeResponseMock(),
       { status: 200
       })
   }, options)
@@ -228,6 +244,7 @@ export const getAIRadarMock = () => [
   getGetLatestDigestMockHandler(),
   getGetHealthMockHandler(),
   getListKnowledgeMockHandler(),
+  getAddKnowledgeMockHandler(),
   getFilterKnowledgeMockHandler(),
   getGetKnowledgeMockHandler(),
   getGetRelatedMockHandler(),
