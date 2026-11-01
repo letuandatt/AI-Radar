@@ -16,6 +16,7 @@ from typing import Any
 from app.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from app.core.logger import get_logger
 from app.core.retry import retry_on_transient_error
+from app.models.feedback import FeedbackRating, adjusted_importance
 from app.models.knowledge_object import KnowledgeObject
 from app.models.metadata import ExtractionResult
 from app.storage.knowledge.base import SQLiteConnectionManager
@@ -1323,11 +1324,12 @@ class SQLiteKnowledgeStore:
                 "trends": [json.loads(row[0]) for row in trends],
             }
 
-    def save_importance_scores(self, records: list[dict[str, Any]]) -> None:
-        """Upsert the whole batch atomically; reject deleted IDs and stale writes."""
+    def save_importance_scores(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Save atomically using the latest feedback, even if it changed during scoring."""
         self._check_circuit()
         if not records:
-            return
+            return []
+        persisted = []
         with self._op_lock, self._conn_manager.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for record in records:
@@ -1344,6 +1346,10 @@ class SQLiteKnowledgeStore:
                     record["computed_at"]
                 ):
                     raise ValueError("Cannot overwrite a newer importance score")
+                feedback = conn.execute(
+                    "SELECT rating FROM user_feedback WHERE knowledge_id = ?", (identity,)
+                ).fetchone()
+                record = self._apply_feedback(record, feedback[0] if feedback else None)
                 conn.execute(
                     """
                     INSERT INTO importance_scores (knowledge_id, computed_at, final_score,
@@ -1365,6 +1371,23 @@ class SQLiteKnowledgeStore:
                         json.dumps(record, ensure_ascii=False, allow_nan=False),
                     ),
                 )
+                persisted.append(record)
+        return persisted
+
+    @staticmethod
+    def _apply_feedback(record: dict[str, Any], rating: FeedbackRating | None) -> dict[str, Any]:
+        """Always derive from the rule/LLM base; never adjust an already adjusted final score."""
+        base = (
+            0.7 * record["rule_score"] + 0.3 * record["llm_score"]
+            if record["llm_score"] is not None
+            else record["rule_score"]
+        )
+        return {
+            **record,
+            "score_version": "v2",
+            "feedback_rating": rating,
+            "final_score": adjusted_importance(base, rating),
+        }
 
     def get_importance_score(self, knowledge_id: str) -> dict[str, Any] | None:
         """Return the latest saved score only while its knowledge item is live."""
@@ -1380,6 +1403,77 @@ class SQLiteKnowledgeStore:
                 .fetchone()
             )
             return json.loads(row[0]) if row else None
+
+    # ------------------------------------------------------------------
+    # Reader Feedback
+    # ------------------------------------------------------------------
+
+    def save_user_feedback(
+        self, knowledge_id: str, rating: FeedbackRating | None
+    ) -> dict[str, Any]:
+        """Replace or clear a choice and its score atomically; identical writes are no-ops."""
+        self._check_circuit()
+        adjusted_importance(0.5, rating)
+        with self._op_lock, self._conn_manager.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._read_user_feedback(conn, knowledge_id)
+            if current["rating"] == rating:
+                return current
+            if rating is None:
+                conn.execute("DELETE FROM user_feedback WHERE knowledge_id = ?", (knowledge_id,))
+            else:
+                conn.execute(
+                    "INSERT INTO user_feedback (knowledge_id, rating, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(knowledge_id) DO UPDATE SET "
+                    "rating=excluded.rating, updated_at=excluded.updated_at",
+                    (knowledge_id, rating, datetime.now(timezone.utc).isoformat()),
+                )
+            if current["score"] is not None:
+                score = self._apply_feedback(current["score"], rating)
+                conn.execute(
+                    "UPDATE importance_scores SET final_score = ?, payload_json = ? "
+                    "WHERE knowledge_id = ?",
+                    (score["final_score"], json.dumps(score, allow_nan=False), knowledge_id),
+                )
+            return self._read_user_feedback(conn, knowledge_id)
+
+    @staticmethod
+    def _read_user_feedback(conn: sqlite3.Connection, knowledge_id: str) -> dict[str, Any]:
+        row = conn.execute(
+            "SELECT k.id, f.rating, f.updated_at, s.payload_json FROM knowledge_objects k "
+            "LEFT JOIN user_feedback f ON f.knowledge_id = k.id "
+            "LEFT JOIN importance_scores s ON s.knowledge_id = k.id "
+            "WHERE k.id = ? AND k.deleted_at IS NULL",
+            (knowledge_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Knowledge item not found")
+        return {
+            "knowledge_id": row[0],
+            "rating": row[1],
+            "updated_at": row[2],
+            "score": json.loads(row[3]) if row[3] else None,
+        }
+
+    def get_user_feedback(self, knowledge_id: str) -> dict[str, Any]:
+        """Read a choice and score in one statement; deleted items are unavailable."""
+        self._check_circuit()
+        with self._op_lock:
+            return self._read_user_feedback(self._conn_manager.get_connection(), knowledge_id)
+
+    def list_user_feedback_topics(self) -> list[dict[str, Any]]:
+        """Read current topic metadata for live rated items only."""
+        self._check_circuit()
+        with self._op_lock:
+            rows = (
+                self._conn_manager.get_connection()
+                .execute(
+                    "SELECT f.rating, k.metadata_json FROM user_feedback f "
+                    "JOIN knowledge_objects k ON k.id = f.knowledge_id WHERE k.deleted_at IS NULL"
+                )
+                .fetchall()
+            )
+            return [{"rating": row[0], "metadata_json": row[1]} for row in rows]
 
     # ------------------------------------------------------------------
     # Trend Runs and Snapshots

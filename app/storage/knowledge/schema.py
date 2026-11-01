@@ -301,10 +301,23 @@ CREATE TABLE IF NOT EXISTS daily_digests (
 """
 
 # =============================================================================
+# Reader feedback
+# =============================================================================
+
+CREATE_USER_FEEDBACK_TABLE = """
+CREATE TABLE IF NOT EXISTS user_feedback (
+    knowledge_id TEXT PRIMARY KEY REFERENCES knowledge_objects(id) ON DELETE CASCADE,
+    rating TEXT NOT NULL CHECK (rating IN ('useful', 'not_useful')),
+    updated_at TEXT NOT NULL
+);
+"""
+
+# =============================================================================
 # All DDL statements in execution order
 # =============================================================================
 
 ALL_DDL_STATEMENTS: list[str] = [
+    CREATE_USER_FEEDBACK_TABLE,
     CREATE_INTELLIGENCE_DOCUMENTS_TABLE,
     CREATE_DAILY_DIGESTS_TABLE,
     CREATE_INSIGHT_RUNS_TABLE,
